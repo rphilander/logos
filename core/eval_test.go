@@ -101,6 +101,50 @@ func TestEvalLetrecErrors(t *testing.T) {
 	testEvalError(t, `(letrec ((x)) x)`)             // binding pair wrong length
 }
 
+// --- Fuel ---
+
+func testEvalFuel(t *testing.T, input string, fuel int, expected Value) {
+	t.Helper()
+	ev := &Evaluator{Builtins: DataBuiltins(), Fuel: fuel, FuelSet: true}
+	val, err := ev.EvalString(input)
+	if err != nil {
+		t.Fatalf("eval %q (fuel=%d): %v", input, fuel, err)
+	}
+	if !ValuesEqual(val, expected) {
+		t.Fatalf("eval %q (fuel=%d): expected %s, got %s", input, fuel, expected.String(), val.String())
+	}
+}
+
+func testEvalFuelError(t *testing.T, input string, fuel int) {
+	t.Helper()
+	ev := &Evaluator{Builtins: DataBuiltins(), Fuel: fuel, FuelSet: true}
+	_, err := ev.EvalString(input)
+	if err == nil {
+		t.Fatalf("expected fuel error for %q (fuel=%d)", input, fuel)
+	}
+}
+
+func TestFuelExhaustion(t *testing.T) {
+	// Infinite recursion caught by fuel
+	testEvalFuelError(t, `(letrec ((f (fn () (f)))) (f))`, 100)
+}
+
+func TestFuelSufficient(t *testing.T) {
+	// Simple expression with generous fuel succeeds
+	testEvalFuel(t, `(add 1 2)`, 1000, IntVal(3))
+}
+
+func TestFuelExact(t *testing.T) {
+	// Literal requires exactly 1 eval step
+	testEvalFuel(t, `42`, 1, IntVal(42))
+	testEvalFuelError(t, `42`, 0)
+}
+
+func TestNoFuelDefault(t *testing.T) {
+	// Default (FuelSet=false) means no limit — existing testEval covers this
+	testEval(t, `(add 1 2)`, IntVal(3))
+}
+
 // --- Cond ---
 
 func TestEvalCond(t *testing.T) {

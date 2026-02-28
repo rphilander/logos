@@ -23,6 +23,8 @@ type Evaluator struct {
 	locals        []map[string]Value
 	activeTrace   *Trace  // set by Core during external evals
 	currentNodeID string  // tracks innermost graph node being evaluated
+	Fuel          int     // remaining eval steps when FuelSet is true
+	FuelSet       bool    // whether fuel limiting is active
 }
 
 func (e *Evaluator) pushScope(bindings map[string]Value) {
@@ -43,6 +45,12 @@ func (e *Evaluator) lookupLocal(name string) (Value, bool) {
 }
 
 func (e *Evaluator) Eval(node *Node) (Value, error) {
+	if e.FuelSet {
+		if e.Fuel <= 0 {
+			return Value{}, fmt.Errorf("fuel exhausted")
+		}
+		e.Fuel--
+	}
 	switch node.Kind {
 	case NodeInt:
 		return IntVal(node.Int), nil
@@ -472,6 +480,12 @@ func (e *Evaluator) evalTail(node *Node) (Value, *tailContinuation, error) {
 
 // evalListTail dispatches list evaluation in tail position.
 func (e *Evaluator) evalListTail(node *Node) (Value, *tailContinuation, error) {
+	if e.FuelSet {
+		if e.Fuel <= 0 {
+			return Value{}, nil, fmt.Errorf("fuel exhausted")
+		}
+		e.Fuel--
+	}
 	if len(node.Children) == 0 {
 		return Value{}, nil, fmt.Errorf("cannot eval empty list")
 	}

@@ -31,6 +31,7 @@ type Core struct {
 	cbListener  net.Listener // callback socket
 	traces      []Trace
 	maxTraces   int
+	defaultFuel int // 0 = unlimited
 }
 
 type coreRequest struct {
@@ -195,6 +196,10 @@ func (c *Core) handleRequest(msg map[string]any) map[string]any {
 		return c.handlePreludeList(id, msg)
 	case "clear":
 		return c.handleClear(id, msg)
+	case "set-fuel":
+		return c.handleSetFuel(id, msg)
+	case "get-fuel":
+		return c.handleGetFuel(id, msg)
 	default:
 		return errorResponse(id, fmt.Sprintf("unknown op: %s", op))
 	}
@@ -219,8 +224,10 @@ func (c *Core) handleCallbackRequest(msg map[string]any) map[string]any {
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 	c.graph.eval.activeTrace = trace
+	c.setEvalFuel(nil)
 	result, err := c.graph.eval.CallFnWithValues(handler.Fn, []Value{reqVal})
 	c.graph.eval.activeTrace = nil
+	c.graph.eval.FuelSet = false
 
 	if err != nil {
 		trace.Error = err.Error()
@@ -254,6 +261,8 @@ func (c *Core) coreManual(id string) map[string]any {
 				"prelude-remove": "Remove a symbol from the prelude. Params: name (string)",
 				"prelude-list":  "List all symbols in the prelude.",
 				"clear":         "Clear session: truncate log, reset graph, reload prelude.",
+				"set-fuel":      "Set global eval fuel limit. Params: fuel (int, 0=unlimited)",
+				"get-fuel":      "Get current fuel limit.",
 			},
 			"builtins": []any{
 				"list", "dict", "get", "head", "rest", "len", "keys",
@@ -287,8 +296,10 @@ func (c *Core) handleEval(id string, msg map[string]any) map[string]any {
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 	c.graph.eval.activeTrace = trace
+	c.setEvalFuel(msg)
 	val, err := c.graph.Eval(expr)
 	c.graph.eval.activeTrace = nil
+	c.graph.eval.FuelSet = false
 
 	if err != nil {
 		trace.Error = err.Error()
@@ -411,6 +422,36 @@ func (c *Core) handleClear(id string, msg map[string]any) map[string]any {
 	}
 	c.traces = nil
 	return map[string]any{"id": id, "ok": true, "value": "cleared"}
+}
+
+// setEvalFuel configures fuel on the evaluator before an eval.
+// Resolution: per-eval (msg["fuel"]) > global default.
+func (c *Core) setEvalFuel(msg map[string]any) {
+	fuel := c.defaultFuel
+	if msg != nil {
+		if f, ok := msg["fuel"].(float64); ok && int(f) > 0 {
+			fuel = int(f)
+		}
+	}
+	if fuel > 0 {
+		c.graph.eval.Fuel = fuel
+		c.graph.eval.FuelSet = true
+	} else {
+		c.graph.eval.FuelSet = false
+	}
+}
+
+func (c *Core) handleSetFuel(id string, msg map[string]any) map[string]any {
+	f, ok := msg["fuel"].(float64)
+	if !ok {
+		return errorResponse(id, "set-fuel: missing 'fuel' number")
+	}
+	c.defaultFuel = int(f)
+	return map[string]any{"id": id, "ok": true, "value": c.defaultFuel}
+}
+
+func (c *Core) handleGetFuel(id string, msg map[string]any) map[string]any {
+	return map[string]any{"id": id, "ok": true, "value": c.defaultFuel}
 }
 
 func errorResponse(id, errMsg string) map[string]any {

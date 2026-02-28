@@ -55,7 +55,11 @@ func handleEval(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallTool
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	resp, err := send(map[string]any{"op": "eval", "expr": expr})
+	req := map[string]any{"op": "eval", "expr": expr}
+	if fuel := request.GetInt("fuel", 0); fuel > 0 {
+		req["fuel"] = fuel
+	}
+	resp, err := send(req)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -151,6 +155,26 @@ func handleClear(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToo
 	return formatResult(resp)
 }
 
+func handleSetFuel(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	fuel, err := request.RequireInt("fuel")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	resp, err := send(map[string]any{"op": "set-fuel", "fuel": fuel})
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return formatResult(resp)
+}
+
+func handleGetFuel(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	resp, err := send(map[string]any{"op": "get-fuel"})
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return formatResult(resp)
+}
+
 func handleManual(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	resp, err := send(map[string]any{})
 	if err != nil {
@@ -185,6 +209,9 @@ func main() {
 			mcp.WithString("expr",
 				mcp.Required(),
 				mcp.Description("S-expression to evaluate, e.g. (list 1 2 3)"),
+			),
+			mcp.WithNumber("fuel",
+				mcp.Description("Optional eval step limit (overrides global default)"),
 			),
 		),
 		handleEval,
@@ -264,6 +291,24 @@ func main() {
 			mcp.WithDescription("Clear the session: truncate log, reset graph to prelude-only state, clear traces."),
 		),
 		handleClear,
+	)
+
+	s.AddTool(
+		mcp.NewTool("logos_set_fuel",
+			mcp.WithDescription("Set the global eval fuel limit (0 = unlimited)."),
+			mcp.WithNumber("fuel",
+				mcp.Required(),
+				mcp.Description("Number of eval steps (0 = unlimited)"),
+			),
+		),
+		handleSetFuel,
+	)
+
+	s.AddTool(
+		mcp.NewTool("logos_get_fuel",
+			mcp.WithDescription("Get the current global fuel limit."),
+		),
+		handleGetFuel,
 	)
 
 	s.AddTool(
