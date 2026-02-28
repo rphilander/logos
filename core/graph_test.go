@@ -494,6 +494,269 @@ func TestGraphAssertPass(t *testing.T) {
 	}
 }
 
+// --- Prelude ---
+
+func TestPreludeLoad(t *testing.T) {
+	dir := t.TempDir()
+	// Write a prelude file
+	os.WriteFile(filepath.Join(dir, "prelude.logos"), []byte("(define x 42)\n\n"), 0644)
+
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	val, err := g.Eval("x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(42)) {
+		t.Fatalf("expected 42, got %s", val.String())
+	}
+}
+
+func TestPreludeLoadOrder(t *testing.T) {
+	dir := t.TempDir()
+	// A then B (B refs A)
+	os.WriteFile(filepath.Join(dir, "prelude.logos"),
+		[]byte("(define a 10)\n\n(define b (add a 1))\n\n"), 0644)
+
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	val, err := g.Eval("b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(11)) {
+		t.Fatalf("expected 11, got %s", val.String())
+	}
+}
+
+func TestPreludeOverrideByLog(t *testing.T) {
+	dir := t.TempDir()
+	// Prelude defines x=1
+	os.WriteFile(filepath.Join(dir, "prelude.logos"), []byte("(define x 1)\n\n"), 0644)
+	// Log defines x=2
+	os.WriteFile(filepath.Join(dir, "log.logos"), []byte("(define x 2)\n\n"), 0644)
+
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	val, err := g.Eval("x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(2)) {
+		t.Fatalf("expected 2 (log override), got %s", val.String())
+	}
+}
+
+func TestPreludeAddAndRemove(t *testing.T) {
+	dir := t.TempDir()
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	// Define a symbol
+	g.Define("x", "42")
+
+	// Add to prelude
+	if err := g.PreludeAdd("x"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify prelude file
+	names, err := g.PreludeList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 1 || names[0] != "x" {
+		t.Fatalf("expected [x], got %v", names)
+	}
+
+	// Verify prelude file content
+	data, err := os.ReadFile(filepath.Join(dir, "prelude.logos"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "(define x 42)\n\n" {
+		t.Fatalf("unexpected prelude content: %q", string(data))
+	}
+
+	// Remove from prelude
+	if err := g.PreludeRemove("x"); err != nil {
+		t.Fatal(err)
+	}
+	names, err = g.PreludeList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 0 {
+		t.Fatalf("expected empty, got %v", names)
+	}
+}
+
+func TestPreludeAddMissingDep(t *testing.T) {
+	dir := t.TempDir()
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	// Define a, then b depending on a (a not in prelude)
+	g.Define("a", "10")
+	g.Define("b", "a")
+
+	err = g.PreludeAdd("b")
+	if err == nil {
+		t.Fatal("expected error: dependency 'a' not in prelude")
+	}
+}
+
+func TestPreludeAddChain(t *testing.T) {
+	dir := t.TempDir()
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	g.Define("a", "10")
+	g.Define("b", "(add a 1)")
+
+	// Add a first
+	if err := g.PreludeAdd("a"); err != nil {
+		t.Fatal(err)
+	}
+	// Now b's dep (a) is in prelude — should succeed
+	if err := g.PreludeAdd("b"); err != nil {
+		t.Fatal(err)
+	}
+
+	names, err := g.PreludeList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 2 {
+		t.Fatalf("expected 2 entries, got %v", names)
+	}
+}
+
+func TestClear(t *testing.T) {
+	dir := t.TempDir()
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	g.Define("x", "42")
+	g.Define("y", "99")
+
+	if err := g.Clear(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Symbols should be gone
+	_, err = g.Eval("x")
+	if err == nil {
+		t.Fatal("expected error for x after clear")
+	}
+	_, err = g.Eval("y")
+	if err == nil {
+		t.Fatal("expected error for y after clear")
+	}
+
+	// Can still define new things
+	g.Define("z", "1")
+	val, err := g.Eval("z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(1)) {
+		t.Fatalf("expected 1, got %s", val.String())
+	}
+}
+
+func TestClearPreservesPrelude(t *testing.T) {
+	dir := t.TempDir()
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	// Define and promote to prelude
+	g.Define("a", "10")
+	if err := g.PreludeAdd("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Define session-only symbol
+	g.Define("b", "20")
+
+	// Clear
+	if err := g.Clear(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Prelude symbol survives
+	val, err := g.Eval("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(10)) {
+		t.Fatalf("expected 10 from prelude, got %s", val.String())
+	}
+
+	// Session symbol is gone
+	_, err = g.Eval("b")
+	if err == nil {
+		t.Fatal("expected error for b after clear")
+	}
+}
+
+// --- Closures ---
+
+func TestClosureCapture(t *testing.T) {
+	g := testGraph(t)
+	// constantly returns a fn that captures v
+	g.Define("constantly", `(fn (v) (fn (x) v))`)
+	val, err := g.Eval(`((constantly 42) "ignored")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(42)) {
+		t.Fatalf("expected 42, got %s", val.String())
+	}
+}
+
+func TestClosureComp(t *testing.T) {
+	g := testGraph(t)
+	g.Define("inc", `(fn (x) (add x 1))`)
+	g.Define("double", `(fn (x) (mul x 2))`)
+	g.Define("comp", `(fn (f g) (fn (x) (f (g x))))`)
+	// (comp inc double) should be (fn (x) (inc (double x))) = x*2 + 1
+	val, err := g.Eval(`((comp inc double) 5)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(11)) {
+		t.Fatalf("expected 11, got %s", val.String())
+	}
+}
+
 func TestGraphAssertFailInDefinedFn(t *testing.T) {
 	g := testGraph(t)
 	_, err := g.Define("checker", `(fn (x) (assert (gt x 0) "must be positive"))`)

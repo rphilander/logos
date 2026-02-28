@@ -187,6 +187,14 @@ func (c *Core) handleRequest(msg map[string]any) map[string]any {
 		return c.handleDelete(id, msg)
 	case "refresh-all":
 		return c.handleRefreshAll(id, msg)
+	case "prelude-add":
+		return c.handlePreludeAdd(id, msg)
+	case "prelude-remove":
+		return c.handlePreludeRemove(id, msg)
+	case "prelude-list":
+		return c.handlePreludeList(id, msg)
+	case "clear":
+		return c.handleClear(id, msg)
 	default:
 		return errorResponse(id, fmt.Sprintf("unknown op: %s", op))
 	}
@@ -238,10 +246,14 @@ func (c *Core) coreManual(id string) map[string]any {
 			"name":    "logos-core",
 			"version": "3.0.0",
 			"ops": map[string]any{
-				"eval":        "Evaluate a logos expression. Params: expr (string)",
-				"define":      "Define a named symbol. Params: name (string), expr (string)",
-				"delete":      "Delete a named symbol. Params: name (string)",
-				"refresh-all": "Re-resolve dependents of target symbols. Params: targets ([]string), dry (bool, optional)",
+				"eval":          "Evaluate a logos expression. Params: expr (string)",
+				"define":        "Define a named symbol. Params: name (string), expr (string)",
+				"delete":        "Delete a named symbol. Params: name (string)",
+				"refresh-all":   "Re-resolve dependents of target symbols. Params: targets ([]string), dry (bool, optional)",
+				"prelude-add":   "Promote a symbol to the prelude. Params: name (string)",
+				"prelude-remove": "Remove a symbol from the prelude. Params: name (string)",
+				"prelude-list":  "List all symbols in the prelude.",
+				"clear":         "Clear session: truncate log, reset graph, reload prelude.",
 			},
 			"builtins": []any{
 				"list", "dict", "get", "head", "rest", "empty?", "len", "keys",
@@ -347,6 +359,48 @@ func (c *Core) handleRefreshAll(id string, msg map[string]any) map[string]any {
 		"ok":    true,
 		"value": map[string]any{"refreshed": refreshed},
 	}
+}
+
+func (c *Core) handlePreludeAdd(id string, msg map[string]any) map[string]any {
+	name, ok := msg["name"].(string)
+	if !ok {
+		return errorResponse(id, "prelude-add: missing 'name' string")
+	}
+	if err := c.graph.PreludeAdd(name); err != nil {
+		return errorResponse(id, err.Error())
+	}
+	return map[string]any{"id": id, "ok": true, "value": name}
+}
+
+func (c *Core) handlePreludeRemove(id string, msg map[string]any) map[string]any {
+	name, ok := msg["name"].(string)
+	if !ok {
+		return errorResponse(id, "prelude-remove: missing 'name' string")
+	}
+	if err := c.graph.PreludeRemove(name); err != nil {
+		return errorResponse(id, err.Error())
+	}
+	return map[string]any{"id": id, "ok": true, "value": name}
+}
+
+func (c *Core) handlePreludeList(id string, msg map[string]any) map[string]any {
+	names, err := c.graph.PreludeList()
+	if err != nil {
+		return errorResponse(id, err.Error())
+	}
+	result := make([]any, len(names))
+	for i, n := range names {
+		result[i] = n
+	}
+	return map[string]any{"id": id, "ok": true, "value": result}
+}
+
+func (c *Core) handleClear(id string, msg map[string]any) map[string]any {
+	if err := c.graph.Clear(); err != nil {
+		return errorResponse(id, err.Error())
+	}
+	c.traces = nil
+	return map[string]any{"id": id, "ok": true, "value": "cleared"}
 }
 
 func errorResponse(id, errMsg string) map[string]any {

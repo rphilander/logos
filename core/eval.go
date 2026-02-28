@@ -188,6 +188,10 @@ func (e *Evaluator) callFn(fn *FnValue, argNodes []*Node) (Value, error) {
 		}
 		bindings[param] = val
 	}
+	if fn.Closure != nil {
+		e.pushScope(fn.Closure)
+		defer e.popScope()
+	}
 	e.pushScope(bindings)
 	defer e.popScope()
 	if fn.NodeID != "" {
@@ -206,6 +210,10 @@ func (e *Evaluator) CallFnWithValues(fn *FnValue, args []Value) (Value, error) {
 	bindings := make(map[string]Value, len(fn.Params))
 	for i, param := range fn.Params {
 		bindings[param] = args[i]
+	}
+	if fn.Closure != nil {
+		e.pushScope(fn.Closure)
+		defer e.popScope()
 	}
 	e.pushScope(bindings)
 	defer e.popScope()
@@ -294,9 +302,20 @@ func (e *Evaluator) evalFn(node *Node) (Value, error) {
 		}
 		params[i] = p.Str
 	}
+	// Capture enclosing local scope for closure.
+	var closure map[string]Value
+	if len(e.locals) > 0 {
+		closure = make(map[string]Value)
+		for _, scope := range e.locals {
+			for k, v := range scope {
+				closure[k] = v
+			}
+		}
+	}
 	return FnVal(&FnValue{
-		Params: params,
-		Body:   node.Children[2],
+		Params:  params,
+		Body:    node.Children[2],
+		Closure: closure,
 	}), nil
 }
 

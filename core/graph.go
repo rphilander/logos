@@ -27,6 +27,7 @@ type Graph struct {
 	eval         *Evaluator
 	logPath      string
 	logFile      *os.File
+	preludePath  string
 }
 
 // coreFormKeywords are symbols that should not be resolved during define.
@@ -39,12 +40,14 @@ var coreFormKeywords = map[string]bool{
 
 func NewGraph(dir string, builtins map[string]Builtin) (*Graph, error) {
 	logPath := filepath.Join(dir, "log.logos")
+	preludePath := filepath.Join(dir, "prelude.logos")
 
 	g := &Graph{
 		nodes:        make(map[string]*GraphNode),
 		symbols:      make(map[string]string),
 		nameCounters: make(map[string]int),
 		logPath:      logPath,
+		preludePath:  preludePath,
 	}
 
 	// Register graph builtins as closures over the graph.
@@ -59,6 +62,10 @@ func NewGraph(dir string, builtins map[string]Builtin) (*Graph, error) {
 	ev.ResolveNode = g.resolveNode
 	builtins["assert"] = ev.builtinAssert
 	g.eval = ev
+
+	if err := g.loadPrelude(); err != nil {
+		return nil, fmt.Errorf("prelude: %w", err)
+	}
 
 	if err := g.replay(); err != nil {
 		return nil, fmt.Errorf("replay: %w", err)
@@ -511,6 +518,177 @@ func (g *Graph) RefreshAll(targets []string, dry bool) (*RefreshResult, error) {
 	}
 
 	return &RefreshResult{Refreshed: refreshOrder}, nil
+}
+
+// --- Prelude ---
+
+func (g *Graph) loadPrelude() error {
+	data, err := os.ReadFile(g.preludePath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	entries := splitLogEntries(string(data))
+	for _, entry := range entries {
+		if err := g.replayEntry(entry); err != nil {
+			return fmt.Errorf("replaying %q: %w", entry, err)
+		}
+	}
+	return nil
+}
+
+type preludeEntry struct {
+	name string
+	expr string
+}
+
+func readPreludeEntries(path string) ([]preludeEntry, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	raw := splitLogEntries(string(data))
+	var entries []preludeEntry
+	for _, s := range raw {
+		node, err := Parse(s)
+		if err != nil {
+			return nil, fmt.Errorf("parse prelude entry %q: %w", s, err)
+		}
+		if node.Kind != NodeList || len(node.Children) < 3 {
+			return nil, fmt.Errorf("invalid prelude entry: %s", s)
+		}
+		if node.Children[0].Kind != NodeSymbol || node.Children[0].Str != "define" {
+			return nil, fmt.Errorf("prelude entry must be define: %s", s)
+		}
+		name := node.Children[1].Str
+		expr := extractDefineExpr(s)
+		entries = append(entries, preludeEntry{name: name, expr: expr})
+	}
+	return entries, nil
+}
+
+func writePreludeEntries(path string, entries []preludeEntry) error {
+	var sb strings.Builder
+	for _, e := range entries {
+		fmt.Fprintf(&sb, "(define %s %s)\n\n", e.name, e.expr)
+	}
+	return os.WriteFile(path, []byte(sb.String()), 0644)
+}
+
+func (g *Graph) PreludeAdd(name string) error {
+	nodeID, ok := g.symbols[name]
+	if !ok {
+		return fmt.Errorf("prelude-add: undefined symbol: %s", name)
+	}
+	node := g.nodes[nodeID]
+
+	// Check that all refs are builtins or already in prelude
+	entries, err := readPreludeEntries(g.preludePath)
+	if err != nil {
+		return fmt.Errorf("prelude-add: %w", err)
+	}
+	preludeNames := make(map[string]bool)
+	for _, e := range entries {
+		preludeNames[e.name] = true
+	}
+	for _, ref := range node.Refs {
+		sym := ref.Symbol
+		if _, isBuiltin := g.eval.Builtins[sym]; isBuiltin {
+			continue
+		}
+		if preludeNames[sym] {
+			continue
+		}
+		return fmt.Errorf("prelude-add: dependency %q is not a builtin or in the prelude", sym)
+	}
+
+	// Replace or append
+	found := false
+	for i, e := range entries {
+		if e.name == name {
+			entries[i].expr = node.Source
+			found = true
+			break
+		}
+	}
+	if !found {
+		entries = append(entries, preludeEntry{name: name, expr: node.Source})
+	}
+
+	return writePreludeEntries(g.preludePath, entries)
+}
+
+func (g *Graph) PreludeRemove(name string) error {
+	entries, err := readPreludeEntries(g.preludePath)
+	if err != nil {
+		return fmt.Errorf("prelude-remove: %w", err)
+	}
+
+	found := false
+	var filtered []preludeEntry
+	for _, e := range entries {
+		if e.name == name {
+			found = true
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	if !found {
+		return fmt.Errorf("prelude-remove: %q not in prelude", name)
+	}
+
+	return writePreludeEntries(g.preludePath, filtered)
+}
+
+func (g *Graph) PreludeList() ([]string, error) {
+	entries, err := readPreludeEntries(g.preludePath)
+	if err != nil {
+		return nil, fmt.Errorf("prelude-list: %w", err)
+	}
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.name
+	}
+	return names, nil
+}
+
+// --- Clear ---
+
+func (g *Graph) Clear() error {
+	// Close current log file
+	if g.logFile != nil {
+		g.logFile.Close()
+		g.logFile = nil
+	}
+
+	// Truncate log
+	if err := os.Remove(g.logPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("clear: remove log: %w", err)
+	}
+
+	// Reset graph state
+	g.nodes = make(map[string]*GraphNode)
+	g.symbols = make(map[string]string)
+	g.nameCounters = make(map[string]int)
+
+	// Reload prelude
+	if err := g.loadPrelude(); err != nil {
+		return fmt.Errorf("clear: reload prelude: %w", err)
+	}
+
+	// Reopen log file
+	f, err := os.OpenFile(g.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("clear: reopen log: %w", err)
+	}
+	g.logFile = f
+	return nil
 }
 
 // --- Log ---

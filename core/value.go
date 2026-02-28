@@ -24,9 +24,10 @@ const (
 )
 
 type FnValue struct {
-	Params []string
-	Body   *Node
-	NodeID string
+	Params  []string
+	Body    *Node
+	NodeID  string
+	Closure map[string]Value
 }
 
 type Value struct {

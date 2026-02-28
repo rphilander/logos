@@ -111,6 +111,46 @@ func handleDelete(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallTo
 	return formatResult(resp)
 }
 
+func handlePreludeAdd(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, err := request.RequireString("name")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	resp, err := send(map[string]any{"op": "prelude-add", "name": name})
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return formatResult(resp)
+}
+
+func handlePreludeRemove(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, err := request.RequireString("name")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	resp, err := send(map[string]any{"op": "prelude-remove", "name": name})
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return formatResult(resp)
+}
+
+func handlePreludeList(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	resp, err := send(map[string]any{"op": "prelude-list"})
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return formatResult(resp)
+}
+
+func handleClear(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	resp, err := send(map[string]any{"op": "clear"})
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return formatResult(resp)
+}
+
 func main() {
 	sockPath := os.Getenv("LOGOS_SOCK")
 	if sockPath == "" {
@@ -180,6 +220,42 @@ func main() {
 			),
 		),
 		handleRefreshAll,
+	)
+
+	s.AddTool(
+		mcp.NewTool("logos_prelude_add",
+			mcp.WithDescription("Promote a defined symbol to the prelude. The symbol and all its dependencies must already be builtins or in the prelude."),
+			mcp.WithString("name",
+				mcp.Required(),
+				mcp.Description("Symbol name to add to the prelude"),
+			),
+		),
+		handlePreludeAdd,
+	)
+
+	s.AddTool(
+		mcp.NewTool("logos_prelude_remove",
+			mcp.WithDescription("Remove a symbol from the prelude."),
+			mcp.WithString("name",
+				mcp.Required(),
+				mcp.Description("Symbol name to remove from the prelude"),
+			),
+		),
+		handlePreludeRemove,
+	)
+
+	s.AddTool(
+		mcp.NewTool("logos_prelude_list",
+			mcp.WithDescription("List all symbols in the prelude."),
+		),
+		handlePreludeList,
+	)
+
+	s.AddTool(
+		mcp.NewTool("logos_clear",
+			mcp.WithDescription("Clear the session: truncate log, reset graph to prelude-only state, clear traces."),
+		),
+		handleClear,
 	)
 
 	if err := server.ServeStdio(s); err != nil {
