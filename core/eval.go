@@ -124,18 +124,10 @@ func (e *Evaluator) evalList(node *Node) (Value, error) {
 			return e.evalCond(node)
 		case "case":
 			return e.evalCase(node)
-		case "map":
-			return e.evalMap(node)
-		case "filter":
-			return e.evalFilter(node)
-		case "fold":
-			return e.evalFold(node)
 		case "apply":
 			return e.evalApply(node)
 		case "sort-by":
 			return e.evalSortBy(node)
-		case "group-by":
-			return e.evalGroupBy(node)
 		}
 	}
 
@@ -176,53 +168,82 @@ func (e *Evaluator) callBuiltin(fn Builtin, argNodes []*Node) (Value, error) {
 	return fn(args)
 }
 
+// tailContinuation signals a tail call to the trampoline loop.
+// Exported fields for future ToValue() conversion (step evaluator).
+type tailContinuation struct {
+	Fn   *FnValue
+	Args []Value
+}
+
 func (e *Evaluator) callFn(fn *FnValue, argNodes []*Node) (Value, error) {
 	if len(argNodes) != len(fn.Params) {
 		return Value{}, fmt.Errorf("fn: expected %d args, got %d", len(fn.Params), len(argNodes))
 	}
-	bindings := make(map[string]Value, len(fn.Params))
-	for i, param := range fn.Params {
-		val, err := e.Eval(argNodes[i])
+	args := make([]Value, len(fn.Params))
+	for i, argNode := range argNodes {
+		val, err := e.Eval(argNode)
 		if err != nil {
 			return Value{}, err
 		}
-		bindings[param] = val
+		args[i] = val
 	}
-	if fn.Closure != nil {
-		e.pushScope(fn.Closure)
-		defer e.popScope()
-	}
-	e.pushScope(bindings)
-	defer e.popScope()
-	if fn.NodeID != "" {
-		prev := e.currentNodeID
-		e.currentNodeID = fn.NodeID
-		defer func() { e.currentNodeID = prev }()
-	}
-	return e.Eval(fn.Body)
+	return e.callFnTrampolined(fn, args)
 }
 
 // CallFnWithValues calls a user-defined function with pre-evaluated Values.
 func (e *Evaluator) CallFnWithValues(fn *FnValue, args []Value) (Value, error) {
-	if len(args) != len(fn.Params) {
-		return Value{}, fmt.Errorf("fn: expected %d args, got %d", len(fn.Params), len(args))
-	}
-	bindings := make(map[string]Value, len(fn.Params))
-	for i, param := range fn.Params {
-		bindings[param] = args[i]
-	}
-	if fn.Closure != nil {
-		e.pushScope(fn.Closure)
-		defer e.popScope()
-	}
-	e.pushScope(bindings)
-	defer e.popScope()
-	if fn.NodeID != "" {
+	return e.callFnTrampolined(fn, args)
+}
+
+// callFnTrampolined is the TCO trampoline. It evaluates the function body
+// in tail position. If the body is a tail call, it loops instead of recursing.
+func (e *Evaluator) callFnTrampolined(fn *FnValue, args []Value) (Value, error) {
+	baseScope := len(e.locals)
+	defer func() { e.locals = e.locals[:baseScope] }()
+
+	for {
+		if len(args) != len(fn.Params) {
+			return Value{}, fmt.Errorf("fn: expected %d args, got %d", len(fn.Params), len(args))
+		}
+
+		// Reset scope to base (cleans up from previous iteration)
+		e.locals = e.locals[:baseScope]
+
+		// Push closure scope
+		if fn.Closure != nil {
+			e.pushScope(fn.Closure)
+		}
+
+		// Push bindings scope
+		bindings := make(map[string]Value, len(fn.Params))
+		for i, param := range fn.Params {
+			bindings[param] = args[i]
+		}
+		e.pushScope(bindings)
+
+		// Save/set currentNodeID
 		prev := e.currentNodeID
-		e.currentNodeID = fn.NodeID
-		defer func() { e.currentNodeID = prev }()
+		if fn.NodeID != "" {
+			e.currentNodeID = fn.NodeID
+		}
+
+		// Evaluate body in tail position
+		val, cont, err := e.evalTail(fn.Body)
+
+		// Restore currentNodeID
+		e.currentNodeID = prev
+
+		if err != nil {
+			return Value{}, err
+		}
+		if cont == nil {
+			return val, nil
+		}
+
+		// Tail call: loop with new fn and args
+		fn = cont.Fn
+		args = cont.Args
 	}
-	return e.Eval(fn.Body)
 }
 
 // evalIf: (if cond then else) — uses Truthy, not Bool-only.
@@ -375,100 +396,180 @@ func (e *Evaluator) evalCase(node *Node) (Value, error) {
 	return NilVal(), nil
 }
 
-// evalMap: (map fn list) — apply fn to each element, return new list.
-func (e *Evaluator) evalMap(node *Node) (Value, error) {
-	if len(node.Children) != 3 {
-		return Value{}, fmt.Errorf("map: expected 2 args (fn list), got %d", len(node.Children)-1)
+// --- Tail-call optimization (TCO) ---
+
+// evalTail evaluates a node in tail position. Returns either a value or a
+// tail-call continuation for the trampoline to execute.
+func (e *Evaluator) evalTail(node *Node) (Value, *tailContinuation, error) {
+	if node.Kind == NodeList {
+		return e.evalListTail(node)
 	}
-	fnVal, err := e.Eval(node.Children[1])
-	if err != nil {
-		return Value{}, err
-	}
-	if fnVal.Kind != ValFn {
-		return Value{}, fmt.Errorf("map: first arg must be Fn, got %s", fnVal.KindName())
-	}
-	listVal, err := e.Eval(node.Children[2])
-	if err != nil {
-		return Value{}, err
-	}
-	if listVal.Kind != ValList {
-		return Value{}, fmt.Errorf("map: second arg must be List, got %s", listVal.KindName())
-	}
-	elems := *listVal.List
-	result := make([]Value, len(elems))
-	for i, elem := range elems {
-		v, err := e.CallFnWithValues(fnVal.Fn, []Value{elem})
-		if err != nil {
-			return Value{}, err
-		}
-		result[i] = v
-	}
-	return ListVal(result), nil
+	// Literals, symbols, refs — no tail-call opportunity
+	val, err := e.Eval(node)
+	return val, nil, err
 }
 
-// evalFilter: (filter fn list) — keep elements where fn returns truthy.
-func (e *Evaluator) evalFilter(node *Node) (Value, error) {
-	if len(node.Children) != 3 {
-		return Value{}, fmt.Errorf("filter: expected 2 args (fn list), got %d", len(node.Children)-1)
+// evalListTail dispatches list evaluation in tail position.
+func (e *Evaluator) evalListTail(node *Node) (Value, *tailContinuation, error) {
+	if len(node.Children) == 0 {
+		return Value{}, nil, fmt.Errorf("cannot eval empty list")
 	}
-	fnVal, err := e.Eval(node.Children[1])
-	if err != nil {
-		return Value{}, err
-	}
-	if fnVal.Kind != ValFn {
-		return Value{}, fmt.Errorf("filter: first arg must be Fn, got %s", fnVal.KindName())
-	}
-	listVal, err := e.Eval(node.Children[2])
-	if err != nil {
-		return Value{}, err
-	}
-	if listVal.Kind != ValList {
-		return Value{}, fmt.Errorf("filter: second arg must be List, got %s", listVal.KindName())
-	}
-	elems := *listVal.List
-	var result []Value
-	for _, elem := range elems {
-		v, err := e.CallFnWithValues(fnVal.Fn, []Value{elem})
-		if err != nil {
-			return Value{}, err
-		}
-		if v.Truthy() {
-			result = append(result, elem)
+
+	head := node.Children[0]
+
+	// Core forms with tail positions
+	if head.Kind == NodeSymbol {
+		switch head.Str {
+		case "if":
+			return e.evalIfTail(node)
+		case "let":
+			return e.evalLetTail(node)
+		case "do":
+			return e.evalDoTail(node)
+		case "cond":
+			return e.evalCondTail(node)
+		case "case":
+			return e.evalCaseTail(node)
+		// Non-tail core forms: delegate to regular eval
+		case "fn", "quote", "apply", "sort-by":
+			val, err := e.evalList(node)
+			return val, nil, err
 		}
 	}
-	return ListVal(result), nil
+
+	// Builtins
+	if head.Kind == NodeSymbol && e.Builtins != nil {
+		if fn, ok := e.Builtins[head.Str]; ok {
+			val, err := e.callBuiltin(fn, node.Children[1:])
+			return val, nil, err
+		}
+	}
+
+	// Evaluate head — should produce a function
+	headVal, err := e.Eval(head)
+	if err != nil {
+		if head.Kind == NodeSymbol {
+			return Value{}, nil, fmt.Errorf("unknown function: %s", head.Str)
+		}
+		return Value{}, nil, err
+	}
+	if headVal.Kind == ValFn {
+		// Tail call: return continuation instead of calling
+		args := make([]Value, len(node.Children)-1)
+		for i, argNode := range node.Children[1:] {
+			val, err := e.Eval(argNode)
+			if err != nil {
+				return Value{}, nil, err
+			}
+			args[i] = val
+		}
+		return Value{}, &tailContinuation{Fn: headVal.Fn, Args: args}, nil
+	}
+
+	if head.Kind == NodeSymbol {
+		return Value{}, nil, fmt.Errorf("cannot call %s: not a function", head.Str)
+	}
+	return Value{}, nil, fmt.Errorf("cannot call %s value", headVal.KindName())
 }
 
-// evalFold: (fold fn init list) — left fold.
-func (e *Evaluator) evalFold(node *Node) (Value, error) {
+func (e *Evaluator) evalIfTail(node *Node) (Value, *tailContinuation, error) {
 	if len(node.Children) != 4 {
-		return Value{}, fmt.Errorf("fold: expected 3 args (fn init list), got %d", len(node.Children)-1)
+		return Value{}, nil, fmt.Errorf("if: expected 3 args (cond then else), got %d", len(node.Children)-1)
 	}
-	fnVal, err := e.Eval(node.Children[1])
+	cond, err := e.Eval(node.Children[1])
 	if err != nil {
-		return Value{}, err
+		return Value{}, nil, err
 	}
-	if fnVal.Kind != ValFn {
-		return Value{}, fmt.Errorf("fold: first arg must be Fn, got %s", fnVal.KindName())
+	if cond.Truthy() {
+		return e.evalTail(node.Children[2])
 	}
-	acc, err := e.Eval(node.Children[2])
-	if err != nil {
-		return Value{}, err
+	return e.evalTail(node.Children[3])
+}
+
+func (e *Evaluator) evalLetTail(node *Node) (Value, *tailContinuation, error) {
+	if len(node.Children) != 3 {
+		return Value{}, nil, fmt.Errorf("let: expected bindings and body")
 	}
-	listVal, err := e.Eval(node.Children[3])
-	if err != nil {
-		return Value{}, err
+	bindingsNode := node.Children[1]
+	if bindingsNode.Kind != NodeList {
+		return Value{}, nil, fmt.Errorf("let: bindings must be a list")
 	}
-	if listVal.Kind != ValList {
-		return Value{}, fmt.Errorf("fold: third arg must be List, got %s", listVal.KindName())
-	}
-	for _, elem := range *listVal.List {
-		acc, err = e.CallFnWithValues(fnVal.Fn, []Value{acc, elem})
+	bindings := make(map[string]Value, len(bindingsNode.Children))
+	e.pushScope(bindings)
+	// No defer popScope — the trampoline handles scope cleanup via baseScope
+
+	for _, pair := range bindingsNode.Children {
+		if pair.Kind != NodeList || len(pair.Children) != 2 {
+			return Value{}, nil, fmt.Errorf("let: each binding must be (name expr)")
+		}
+		nameNode := pair.Children[0]
+		if nameNode.Kind != NodeSymbol {
+			return Value{}, nil, fmt.Errorf("let: binding name must be a symbol")
+		}
+		val, err := e.Eval(pair.Children[1])
 		if err != nil {
-			return Value{}, err
+			return Value{}, nil, err
+		}
+		bindings[nameNode.Str] = val
+	}
+	return e.evalTail(node.Children[2])
+}
+
+func (e *Evaluator) evalDoTail(node *Node) (Value, *tailContinuation, error) {
+	if len(node.Children) < 2 {
+		return Value{}, nil, fmt.Errorf("do: expected at least one expression")
+	}
+	// Evaluate all but the last expression normally
+	for _, child := range node.Children[1 : len(node.Children)-1] {
+		_, err := e.Eval(child)
+		if err != nil {
+			return Value{}, nil, err
 		}
 	}
-	return acc, nil
+	// Last expression is in tail position
+	return e.evalTail(node.Children[len(node.Children)-1])
+}
+
+func (e *Evaluator) evalCondTail(node *Node) (Value, *tailContinuation, error) {
+	args := node.Children[1:]
+	if len(args) == 0 || len(args)%2 != 0 {
+		return Value{}, nil, fmt.Errorf("cond: expected even number of args (test/expr pairs), got %d", len(args))
+	}
+	for i := 0; i < len(args); i += 2 {
+		test, err := e.Eval(args[i])
+		if err != nil {
+			return Value{}, nil, err
+		}
+		if test.Truthy() {
+			return e.evalTail(args[i+1])
+		}
+	}
+	return NilVal(), nil, nil
+}
+
+func (e *Evaluator) evalCaseTail(node *Node) (Value, *tailContinuation, error) {
+	if len(node.Children) < 2 {
+		return Value{}, nil, fmt.Errorf("case: expected target and at least one clause")
+	}
+	target, err := e.Eval(node.Children[1])
+	if err != nil {
+		return Value{}, nil, err
+	}
+	args := node.Children[2:]
+	pairs := len(args) / 2
+	for i := 0; i < pairs; i++ {
+		matchVal, err := e.Eval(args[i*2])
+		if err != nil {
+			return Value{}, nil, err
+		}
+		if ValuesEqual(target, matchVal) {
+			return e.evalTail(args[i*2+1])
+		}
+	}
+	if len(args)%2 != 0 {
+		return e.evalTail(args[len(args)-1])
+	}
+	return NilVal(), nil, nil
 }
 
 // evalApply: (apply fn list) — call fn with list elements as args.
@@ -563,45 +664,6 @@ func (e *Evaluator) evalSortBy(node *Node) (Value, error) {
 		result[i] = item.val
 	}
 	return ListVal(result), nil
-}
-
-// evalGroupBy: (group-by fn list) — group elements by key function into a map.
-func (e *Evaluator) evalGroupBy(node *Node) (Value, error) {
-	if len(node.Children) != 3 {
-		return Value{}, fmt.Errorf("group-by: expected 2 args (fn list), got %d", len(node.Children)-1)
-	}
-	fnVal, err := e.Eval(node.Children[1])
-	if err != nil {
-		return Value{}, err
-	}
-	if fnVal.Kind != ValFn {
-		return Value{}, fmt.Errorf("group-by: first arg must be Fn, got %s", fnVal.KindName())
-	}
-	listVal, err := e.Eval(node.Children[2])
-	if err != nil {
-		return Value{}, err
-	}
-	if listVal.Kind != ValList {
-		return Value{}, fmt.Errorf("group-by: second arg must be List, got %s", listVal.KindName())
-	}
-	groups := make(map[string][]Value)
-	var order []string
-	for _, elem := range *listVal.List {
-		k, err := e.CallFnWithValues(fnVal.Fn, []Value{elem})
-		if err != nil {
-			return Value{}, err
-		}
-		key := k.String()
-		if _, exists := groups[key]; !exists {
-			order = append(order, key)
-		}
-		groups[key] = append(groups[key], elem)
-	}
-	m := make(map[string]Value, len(groups))
-	for _, key := range order {
-		m[key] = ListVal(groups[key])
-	}
-	return MapVal(m), nil
 }
 
 // nodeToValue converts an AST node to a Value for quote.

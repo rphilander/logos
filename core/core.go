@@ -271,7 +271,7 @@ func (c *Core) coreManual(id string) map[string]any {
 			"forms": []any{
 				"if", "let", "do", "fn", "quote",
 				"cond", "case",
-				"map", "filter", "fold", "apply", "sort-by", "group-by",
+				"apply", "sort-by",
 			},
 		},
 	}

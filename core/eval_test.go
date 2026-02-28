@@ -273,22 +273,7 @@ func TestBuiltinNot(t *testing.T) {
 	testEval(t, `(not 0)`, BoolVal(false))
 }
 
-// --- Higher-order ---
-
-func TestEvalMap(t *testing.T) {
-	testEval(t, `(map (fn (x) (add x 1)) (list 1 2 3))`, ListVal([]Value{IntVal(2), IntVal(3), IntVal(4)}))
-	testEval(t, `(map (fn (x) (mul x x)) (list))`, ListVal([]Value{}))
-}
-
-func TestEvalFilter(t *testing.T) {
-	testEval(t, `(filter (fn (x) (gt x 2)) (list 1 2 3 4))`, ListVal([]Value{IntVal(3), IntVal(4)}))
-	testEval(t, `(filter (fn (x) false) (list 1 2))`, ListVal([]Value{}))
-}
-
-func TestEvalFold(t *testing.T) {
-	testEval(t, `(fold (fn (acc x) (add acc x)) 0 (list 1 2 3))`, IntVal(6))
-	testEval(t, `(fold (fn (acc x) (add acc 1)) 0 (list))`, IntVal(0))
-}
+// --- Higher-order (core forms that remain in Go) ---
 
 func TestEvalApply(t *testing.T) {
 	testEval(t, `(apply (fn (a b) (add a b)) (list 3 4))`, IntVal(7))
@@ -297,21 +282,6 @@ func TestEvalApply(t *testing.T) {
 func TestEvalSortBy(t *testing.T) {
 	testEval(t, `(sort-by (fn (x) x) (list 3 1 2))`, ListVal([]Value{IntVal(1), IntVal(2), IntVal(3)}))
 	testEval(t, `(sort-by (fn (x) x) :desc (list 3 1 2))`, ListVal([]Value{IntVal(3), IntVal(2), IntVal(1)}))
-}
-
-func TestEvalGroupBy(t *testing.T) {
-	ev := &Evaluator{Builtins: DataBuiltins()}
-	val, err := ev.EvalString(`(group-by (fn (x) (mod x 2)) (list 1 2 3 4))`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if val.Kind != ValMap {
-		t.Fatalf("expected Map, got %s", val.KindName())
-	}
-	m := *val.Map
-	if len(m) != 2 {
-		t.Fatalf("expected 2 groups, got %d", len(m))
-	}
 }
 
 // --- List ops ---

@@ -19,6 +19,31 @@ func testGraph(t *testing.T) *Graph {
 	return g
 }
 
+const hofPrelude = `(define map-acc (fn (f acc xs) (if (empty? xs) (reverse acc) (map-acc f (cons (f (head xs)) acc) (rest xs)))))
+
+(define map (fn (f xs) (map-acc f (list) xs)))
+
+(define filter-acc (fn (f acc xs) (if (empty? xs) (reverse acc) (if (f (head xs)) (filter-acc f (cons (head xs) acc) (rest xs)) (filter-acc f acc (rest xs))))))
+
+(define filter (fn (f xs) (filter-acc f (list) xs)))
+
+(define fold (fn (f acc xs) (if (empty? xs) acc (fold f (f acc (head xs)) (rest xs)))))
+
+(define group-by (fn (f xs) (fold (fn (acc x) (let ((k (to-string (f x))) (existing (get acc k))) (put acc k (if (nil? existing) (list x) (append existing (list x)))))) (dict) xs)))
+`
+
+func testGraphWithPrelude(t *testing.T) *Graph {
+	t.Helper()
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "prelude.logos"), []byte(hofPrelude), 0644)
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { g.Close() })
+	return g
+}
+
 func TestGraphDefineAndEval(t *testing.T) {
 	g := testGraph(t)
 
@@ -788,5 +813,211 @@ func TestGraphAssertFailInDefinedFn(t *testing.T) {
 	// The node ID should be set to the checker node
 	if ae.Node != "node:checker-1" {
 		t.Fatalf("expected node 'node:checker-1', got %q", ae.Node)
+	}
+}
+
+// --- TCO / Recursion tests ---
+
+func TestRecursionFactorial(t *testing.T) {
+	g := testGraph(t)
+	g.Define("factorial", `(fn (n) (if (le n 1) 1 (mul n (factorial (sub n 1)))))`)
+	val, err := g.Eval(`(factorial 10)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(3628800)) {
+		t.Fatalf("expected 3628800, got %s", val.String())
+	}
+}
+
+func TestTailRecursionDeep(t *testing.T) {
+	g := testGraph(t)
+	g.Define("count-down", `(fn (n) (if (le n 0) 0 (count-down (sub n 1))))`)
+	// Without TCO, 100000 would stack overflow
+	val, err := g.Eval(`(count-down 100000)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(0)) {
+		t.Fatalf("expected 0, got %s", val.String())
+	}
+}
+
+func TestTailRecursiveAccumulator(t *testing.T) {
+	g := testGraph(t)
+	g.Define("my-sum", `(fn (acc xs) (if (empty? xs) acc (my-sum (add acc (head xs)) (rest xs))))`)
+	val, err := g.Eval(`(my-sum 0 (list 1 2 3 4 5))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(15)) {
+		t.Fatalf("expected 15, got %s", val.String())
+	}
+}
+
+func TestTailPositionLet(t *testing.T) {
+	g := testGraph(t)
+	g.Define("loop", `(fn (n) (let ((m (sub n 1))) (if (le m 0) 0 (loop m))))`)
+	val, err := g.Eval(`(loop 100000)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(0)) {
+		t.Fatalf("expected 0, got %s", val.String())
+	}
+}
+
+func TestTailPositionDo(t *testing.T) {
+	g := testGraph(t)
+	g.Define("loop-do", `(fn (n) (do nil (if (le n 0) 0 (loop-do (sub n 1)))))`)
+	val, err := g.Eval(`(loop-do 100000)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(0)) {
+		t.Fatalf("expected 0, got %s", val.String())
+	}
+}
+
+func TestTailPositionCond(t *testing.T) {
+	g := testGraph(t)
+	g.Define("loop-cond", `(fn (n) (cond (le n 0) 0 true (loop-cond (sub n 1))))`)
+	val, err := g.Eval(`(loop-cond 100000)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(0)) {
+		t.Fatalf("expected 0, got %s", val.String())
+	}
+}
+
+func TestTailPositionCase(t *testing.T) {
+	g := testGraph(t)
+	g.Define("loop-case", `(fn (n) (case (le n 0) true 0 false (loop-case (sub n 1))))`)
+	val, err := g.Eval(`(loop-case 100000)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(0)) {
+		t.Fatalf("expected 0, got %s", val.String())
+	}
+}
+
+func TestMutualRecursion(t *testing.T) {
+	g := testGraph(t)
+	g.Define("my-even", `(fn (n) (if (le n 0) true (my-odd (sub n 1))))`)
+	g.Define("my-odd", `(fn (n) (if (le n 0) false (my-even (sub n 1))))`)
+	val, err := g.Eval(`(my-even 100000)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, BoolVal(true)) {
+		t.Fatalf("expected true, got %s", val.String())
+	}
+	val, err = g.Eval(`(my-odd 99999)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, BoolVal(true)) {
+		t.Fatalf("expected true, got %s", val.String())
+	}
+}
+
+// --- Prelude higher-order function tests ---
+
+func TestPreludeMap(t *testing.T) {
+	g := testGraphWithPrelude(t)
+	val, err := g.Eval(`(map (fn (x) (add x 1)) (list 1 2 3))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := ListVal([]Value{IntVal(2), IntVal(3), IntVal(4)})
+	if !ValuesEqual(val, expected) {
+		t.Fatalf("expected %s, got %s", expected.String(), val.String())
+	}
+	// Empty list
+	val, err = g.Eval(`(map (fn (x) (mul x x)) (list))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, ListVal([]Value{})) {
+		t.Fatalf("expected empty list, got %s", val.String())
+	}
+}
+
+func TestPreludeFilter(t *testing.T) {
+	g := testGraphWithPrelude(t)
+	val, err := g.Eval(`(filter (fn (x) (gt x 2)) (list 1 2 3 4))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := ListVal([]Value{IntVal(3), IntVal(4)})
+	if !ValuesEqual(val, expected) {
+		t.Fatalf("expected %s, got %s", expected.String(), val.String())
+	}
+	// All filtered out
+	val, err = g.Eval(`(filter (fn (x) false) (list 1 2))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, ListVal([]Value{})) {
+		t.Fatalf("expected empty list, got %s", val.String())
+	}
+}
+
+func TestPreludeFold(t *testing.T) {
+	g := testGraphWithPrelude(t)
+	val, err := g.Eval(`(fold (fn (acc x) (add acc x)) 0 (list 1 2 3))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(6)) {
+		t.Fatalf("expected 6, got %s", val.String())
+	}
+	// Empty list
+	val, err = g.Eval(`(fold (fn (acc x) (add acc 1)) 0 (list))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(0)) {
+		t.Fatalf("expected 0, got %s", val.String())
+	}
+}
+
+func TestPreludeGroupBy(t *testing.T) {
+	g := testGraphWithPrelude(t)
+	val, err := g.Eval(`(group-by (fn (x) (mod x 2)) (list 1 2 3 4))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val.Kind != ValMap {
+		t.Fatalf("expected Map, got %s", val.KindName())
+	}
+	m := *val.Map
+	if len(m) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(m))
+	}
+}
+
+func TestPreludeHOFLargeList(t *testing.T) {
+	g := testGraphWithPrelude(t)
+	// Build a large list via tail-recursive range
+	g.Define("range-acc", `(fn (n acc) (if (le n 0) acc (range-acc (sub n 1) (cons n acc))))`)
+	g.Define("my-range", `(fn (n) (range-acc n (list)))`)
+	// fold over 10000 elements: sum 1..10000 = 50005000
+	val, err := g.Eval(`(fold (fn (acc x) (add acc x)) 0 (my-range 10000))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(50005000)) {
+		t.Fatalf("expected 50005000, got %s", val.String())
+	}
+	// map over 10000 elements
+	val, err = g.Eval(`(len (map (fn (x) (add x 1)) (my-range 10000)))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(10000)) {
+		t.Fatalf("expected 10000, got %s", val.String())
 	}
 }
