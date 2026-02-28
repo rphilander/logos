@@ -151,6 +151,14 @@ func handleClear(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToo
 	return formatResult(resp)
 }
 
+func handleManual(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	resp, err := send(map[string]any{})
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return formatResult(resp)
+}
+
 func main() {
 	sockPath := os.Getenv("LOGOS_SOCK")
 	if sockPath == "" {
@@ -256,6 +264,13 @@ func main() {
 			mcp.WithDescription("Clear the session: truncate log, reset graph to prelude-only state, clear traces."),
 		),
 		handleClear,
+	)
+
+	s.AddTool(
+		mcp.NewTool("logos_manual",
+			mcp.WithDescription("Return the logos core manual: available ops, builtins, and forms."),
+		),
+		handleManual,
 	)
 
 	if err := server.ServeStdio(s); err != nil {

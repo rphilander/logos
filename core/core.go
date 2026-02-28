@@ -258,10 +258,21 @@ func (c *Core) coreManual(id string) map[string]any {
 			"builtins": []any{
 				"list", "dict", "get", "head", "rest", "empty?", "len", "keys",
 				"eq", "nil?", "to-string", "concat", "modules", "send",
+				"add", "sub", "mul", "div", "mod",
+				"neq", "lt", "gt", "le", "ge",
+				"and", "or", "not",
+				"cons", "nth", "append", "reverse", "uniq",
+				"put", "has?", "dissoc", "merge",
+				"split", "join",
+				"type",
 				"symbols", "node-expr", "ref-by",
 				"assert", "traces",
 			},
-			"forms": []any{"if", "let", "do", "fn", "quote"},
+			"forms": []any{
+				"if", "let", "do", "fn", "quote",
+				"cond", "case",
+				"map", "filter", "fold", "apply", "sort-by", "group-by",
+			},
 		},
 	}
 }
