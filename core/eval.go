@@ -17,10 +17,12 @@ type NodeResolver func(nodeID string) (*Node, error)
 
 // Evaluator evaluates s-expression nodes.
 type Evaluator struct {
-	Resolve     Resolver
-	ResolveNode NodeResolver
-	Builtins    map[string]Builtin
-	locals      []map[string]Value
+	Resolve       Resolver
+	ResolveNode   NodeResolver
+	Builtins      map[string]Builtin
+	locals        []map[string]Value
+	activeTrace   *Trace  // set by Core during external evals
+	currentNodeID string  // tracks innermost graph node being evaluated
 }
 
 func (e *Evaluator) pushScope(bindings map[string]Value) {
@@ -85,7 +87,10 @@ func (e *Evaluator) evalRef(nodeID string) (Value, error) {
 	if err != nil {
 		return Value{}, err
 	}
+	prev := e.currentNodeID
+	e.currentNodeID = nodeID
 	val, err := e.Eval(expr)
+	e.currentNodeID = prev
 	if err != nil {
 		return Value{}, err
 	}
@@ -185,6 +190,11 @@ func (e *Evaluator) callFn(fn *FnValue, argNodes []*Node) (Value, error) {
 	}
 	e.pushScope(bindings)
 	defer e.popScope()
+	if fn.NodeID != "" {
+		prev := e.currentNodeID
+		e.currentNodeID = fn.NodeID
+		defer func() { e.currentNodeID = prev }()
+	}
 	return e.Eval(fn.Body)
 }
 
@@ -199,6 +209,11 @@ func (e *Evaluator) CallFnWithValues(fn *FnValue, args []Value) (Value, error) {
 	}
 	e.pushScope(bindings)
 	defer e.popScope()
+	if fn.NodeID != "" {
+		prev := e.currentNodeID
+		e.currentNodeID = fn.NodeID
+		defer func() { e.currentNodeID = prev }()
+	}
 	return e.Eval(fn.Body)
 }
 
@@ -597,6 +612,24 @@ func nodeToValue(n *Node) Value {
 		return ListVal(elems)
 	default:
 		return NilVal()
+	}
+}
+
+// builtinAssert: (assert condition message) — returns true if condition is truthy,
+// otherwise returns an AssertError with the message and current node ID.
+func (e *Evaluator) builtinAssert(args []Value) (Value, error) {
+	if len(args) != 2 {
+		return Value{}, fmt.Errorf("assert: expected 2 args (condition message), got %d", len(args))
+	}
+	if args[1].Kind != ValString {
+		return Value{}, fmt.Errorf("assert: message must be String, got %s", args[1].KindName())
+	}
+	if args[0].Truthy() {
+		return BoolVal(true), nil
+	}
+	return Value{}, &AssertError{
+		Message: args[1].Str,
+		Node:    e.currentNodeID,
 	}
 }
 

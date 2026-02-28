@@ -1,6 +1,7 @@
 package logos
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -477,5 +478,52 @@ func TestRefreshAllLogReplay(t *testing.T) {
 	}
 	if !ValuesEqual(val, IntVal(20)) {
 		t.Fatalf("expected 20 after replay, got %s", val.String())
+	}
+}
+
+// --- Assert in graph ---
+
+func TestGraphAssertPass(t *testing.T) {
+	g := testGraph(t)
+	val, err := g.Eval(`(assert true "ok")`)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !ValuesEqual(val, BoolVal(true)) {
+		t.Fatalf("expected true, got %s", val.String())
+	}
+}
+
+func TestGraphAssertFailInDefinedFn(t *testing.T) {
+	g := testGraph(t)
+	_, err := g.Define("checker", `(fn (x) (assert (gt x 0) "must be positive"))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Passing case
+	val, err := g.Eval(`(checker 5)`)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !ValuesEqual(val, BoolVal(true)) {
+		t.Fatalf("expected true, got %s", val.String())
+	}
+
+	// Failing case
+	_, err = g.Eval(`(checker 0)`)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var ae *AssertError
+	if !errors.As(err, &ae) {
+		t.Fatalf("expected AssertError, got %T: %v", err, err)
+	}
+	if ae.Message != "must be positive" {
+		t.Fatalf("expected message 'must be positive', got %q", ae.Message)
+	}
+	// The node ID should be set to the checker node
+	if ae.Node != "node:checker-1" {
+		t.Fatalf("expected node 'node:checker-1', got %q", ae.Node)
 	}
 }

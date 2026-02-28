@@ -57,6 +57,7 @@ func NewGraph(dir string, builtins map[string]Builtin) (*Graph, error) {
 	}
 	ev.Resolve = g.makeResolver(ev)
 	ev.ResolveNode = g.resolveNode
+	builtins["assert"] = ev.builtinAssert
 	g.eval = ev
 
 	if err := g.replay(); err != nil {

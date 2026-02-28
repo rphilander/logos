@@ -1,6 +1,7 @@
 package logos
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -415,6 +416,74 @@ func TestBuiltinType(t *testing.T) {
 	testEval(t, `(type (list 1))`, KeywordVal("list"))
 	testEval(t, `(type (dict "a" 1))`, KeywordVal("map"))
 	testEval(t, `(type (fn (x) x))`, KeywordVal("fn"))
+}
+
+// --- Truthy ---
+
+// --- Assert ---
+
+func TestAssertPass(t *testing.T) {
+	ev := &Evaluator{Builtins: DataBuiltins()}
+	ev.Builtins["assert"] = ev.builtinAssert
+	val, err := ev.EvalString(`(assert true "ok")`)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !ValuesEqual(val, BoolVal(true)) {
+		t.Fatalf("expected true, got %s", val.String())
+	}
+}
+
+func TestAssertFail(t *testing.T) {
+	ev := &Evaluator{Builtins: DataBuiltins()}
+	ev.Builtins["assert"] = ev.builtinAssert
+	_, err := ev.EvalString(`(assert false "boom")`)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var ae *AssertError
+	if !errors.As(err, &ae) {
+		t.Fatalf("expected AssertError, got %T: %v", err, err)
+	}
+	if ae.Message != "boom" {
+		t.Fatalf("expected message 'boom', got %q", ae.Message)
+	}
+}
+
+func TestAssertTruthy(t *testing.T) {
+	ev := &Evaluator{Builtins: DataBuiltins()}
+	ev.Builtins["assert"] = ev.builtinAssert
+	// 0 is truthy in logos
+	val, err := ev.EvalString(`(assert 0 "zero is truthy")`)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !ValuesEqual(val, BoolVal(true)) {
+		t.Fatalf("expected true, got %s", val.String())
+	}
+	// nil is falsy
+	_, err = ev.EvalString(`(assert nil "nil is falsy")`)
+	if err == nil {
+		t.Fatal("expected error for nil assertion")
+	}
+}
+
+func TestAssertWrongArity(t *testing.T) {
+	ev := &Evaluator{Builtins: DataBuiltins()}
+	ev.Builtins["assert"] = ev.builtinAssert
+	_, err := ev.EvalString(`(assert true)`)
+	if err == nil {
+		t.Fatal("expected error for wrong arity")
+	}
+}
+
+func TestAssertNonStringMessage(t *testing.T) {
+	ev := &Evaluator{Builtins: DataBuiltins()}
+	ev.Builtins["assert"] = ev.builtinAssert
+	_, err := ev.EvalString(`(assert false 42)`)
+	if err == nil {
+		t.Fatal("expected error for non-string message")
+	}
 }
 
 // --- Truthy ---

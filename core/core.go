@@ -1,12 +1,14 @@
 package logos
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"os"
 	"sync"
+	"time"
 )
 
 // ModuleInfo tracks a connected module.
@@ -27,6 +29,8 @@ type Core struct {
 	listener    net.Listener // CLI socket
 	modListener net.Listener // module socket
 	cbListener  net.Listener // callback socket
+	traces      []Trace
+	maxTraces   int
 }
 
 type coreRequest struct {
@@ -43,13 +47,15 @@ func NewCore(dir, sockPath, modSockPath, cbSockPath string) (*Core, error) {
 	os.Remove(cbSockPath)
 
 	c := &Core{
-		requests: make(chan coreRequest, 64),
+		requests:  make(chan coreRequest, 64),
+		maxTraces: 1000,
 	}
 
 	// Build builtins: data primitives + module interaction
 	builtins := DataBuiltins()
 	builtins["modules"] = c.builtinModules
 	builtins["send"] = c.builtinSend
+	builtins["traces"] = c.builtinTraces
 
 	graph, err := NewGraph(dir, builtins)
 	if err != nil {
@@ -198,10 +204,24 @@ func (c *Core) handleCallbackRequest(msg map[string]any) map[string]any {
 	}
 
 	reqVal := GoToValue(msg)
+
+	trace := &Trace{
+		Entry:     handler.Fn.NodeID,
+		Args:      []Value{reqVal},
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+	c.graph.eval.activeTrace = trace
 	result, err := c.graph.eval.CallFnWithValues(handler.Fn, []Value{reqVal})
+	c.graph.eval.activeTrace = nil
+
 	if err != nil {
+		trace.Error = err.Error()
+		c.appendTrace(trace)
 		return errorResponse(id, err.Error())
 	}
+
+	trace.Result = result
+	c.appendTrace(trace)
 
 	goVal, err := ValueToGo(result)
 	if err != nil {
@@ -227,6 +247,7 @@ func (c *Core) coreManual(id string) map[string]any {
 				"list", "dict", "get", "head", "rest", "empty?", "len", "keys",
 				"eq", "nil?", "to-string", "concat", "modules", "send",
 				"symbols", "node-expr", "ref-by",
+				"assert", "traces",
 			},
 			"forms": []any{"if", "let", "do", "fn", "quote"},
 		},
@@ -238,10 +259,28 @@ func (c *Core) handleEval(id string, msg map[string]any) map[string]any {
 	if !ok {
 		return errorResponse(id, "eval: missing 'expr' string")
 	}
+
+	trace := &Trace{
+		Entry:     expr,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+	c.graph.eval.activeTrace = trace
 	val, err := c.graph.Eval(expr)
+	c.graph.eval.activeTrace = nil
+
 	if err != nil {
+		trace.Error = err.Error()
+		var ae *AssertError
+		if errors.As(err, &ae) {
+			trace.Error = ae.Error()
+		}
+		c.appendTrace(trace)
 		return errorResponse(id, err.Error())
 	}
+
+	trace.Result = val
+	c.appendTrace(trace)
+
 	goVal, err := ValueToGo(val)
 	if err != nil {
 		return errorResponse(id, fmt.Sprintf("serialize result: %s", err))
@@ -487,9 +526,55 @@ func (c *Core) builtinSend(args []Value) (Value, error) {
 		}
 	}
 
-	// Return the value field
+	// Extract response value
+	var respVal Value
 	if val, exists := respMsg["value"]; exists {
-		return GoToValue(val), nil
+		respVal = GoToValue(val)
+	} else {
+		respVal = GoToValue(respMsg)
 	}
-	return GoToValue(respMsg), nil
+
+	// Record send in active trace
+	if c.graph.eval.activeTrace != nil {
+		c.graph.eval.activeTrace.Sends = append(c.graph.eval.activeTrace.Sends, SendRecord{
+			Module:   args[0].Str,
+			Request:  args[1],
+			Response: respVal,
+		})
+	}
+
+	return respVal, nil
+}
+
+// builtinTraces: (traces) or (traces N) — returns last N traces as list of maps.
+func (c *Core) builtinTraces(args []Value) (Value, error) {
+	n := len(c.traces)
+	if len(args) == 1 {
+		if args[0].Kind != ValInt {
+			return Value{}, fmt.Errorf("traces: expected Int arg, got %s", args[0].KindName())
+		}
+		limit := int(args[0].Int)
+		if limit < n {
+			n = limit
+		}
+	} else if len(args) > 1 {
+		return Value{}, fmt.Errorf("traces: expected 0 or 1 args, got %d", len(args))
+	}
+
+	start := len(c.traces) - n
+	result := make([]Value, n)
+	for i := 0; i < n; i++ {
+		result[i] = c.traces[start+i].ToValue()
+	}
+	return ListVal(result), nil
+}
+
+// appendTrace adds a trace and enforces the maxTraces cap.
+func (c *Core) appendTrace(t *Trace) {
+	c.traces = append(c.traces, *t)
+	if len(c.traces) > c.maxTraces {
+		// Drop oldest traces
+		excess := len(c.traces) - c.maxTraces
+		c.traces = c.traces[excess:]
+	}
 }
