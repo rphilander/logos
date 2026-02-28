@@ -766,8 +766,7 @@ func DataBuiltins() map[string]Builtin {
 		"dissoc": builtinDissoc,
 		"merge":  builtinMerge,
 		// String
-		"split": builtinSplit,
-		"join":  builtinJoin,
+		"split-once": builtinSplitOnce,
 	}
 }
 
@@ -856,10 +855,8 @@ func builtinLen(args []Value) (Value, error) {
 		return IntVal(int64(len(*args[0].List))), nil
 	case ValMap:
 		return IntVal(int64(len(*args[0].Map))), nil
-	case ValString:
-		return IntVal(int64(len(args[0].Str))), nil
 	default:
-		return Value{}, fmt.Errorf("len: expected List, Map, or String, got %s", args[0].KindName())
+		return Value{}, fmt.Errorf("len: expected List or Map, got %s", args[0].KindName())
 	}
 }
 
@@ -1309,38 +1306,23 @@ func builtinMerge(args []Value) (Value, error) {
 
 // --- String ops ---
 
-func builtinSplit(args []Value) (Value, error) {
+func builtinSplitOnce(args []Value) (Value, error) {
 	if len(args) != 2 {
-		return Value{}, fmt.Errorf("split: expected 2 args, got %d", len(args))
+		return Value{}, fmt.Errorf("split-once: expected 2 args, got %d", len(args))
 	}
 	if args[0].Kind != ValString || args[1].Kind != ValString {
-		return Value{}, fmt.Errorf("split: expected two Strings, got %s and %s", args[0].KindName(), args[1].KindName())
+		return Value{}, fmt.Errorf("split-once: expected two Strings, got %s and %s", args[0].KindName(), args[1].KindName())
 	}
-	parts := strings.Split(args[0].Str, args[1].Str)
-	result := make([]Value, len(parts))
-	for i, p := range parts {
-		result[i] = StringVal(p)
+	needle := args[0].Str
+	if needle == "" {
+		return Value{}, fmt.Errorf("split-once: needle must not be empty")
 	}
-	return ListVal(result), nil
-}
-
-func builtinJoin(args []Value) (Value, error) {
-	if len(args) != 2 {
-		return Value{}, fmt.Errorf("join: expected 2 args, got %d", len(args))
+	haystack := args[1].Str
+	idx := strings.Index(haystack, needle)
+	if idx == -1 {
+		return NilVal(), nil
 	}
-	if args[0].Kind != ValString {
-		return Value{}, fmt.Errorf("join: first arg must be String separator, got %s", args[0].KindName())
-	}
-	if args[1].Kind != ValList {
-		return Value{}, fmt.Errorf("join: second arg must be List, got %s", args[1].KindName())
-	}
-	elems := *args[1].List
-	parts := make([]string, len(elems))
-	for i, e := range elems {
-		if e.Kind != ValString {
-			return Value{}, fmt.Errorf("join: list element %d must be String, got %s", i, e.KindName())
-		}
-		parts[i] = e.Str
-	}
-	return StringVal(strings.Join(parts, args[0].Str)), nil
+	before := haystack[:idx]
+	after := haystack[idx+len(needle):]
+	return ListVal([]Value{StringVal(before), StringVal(after)}), nil
 }

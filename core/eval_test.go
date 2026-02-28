@@ -159,7 +159,6 @@ func TestBuiltinEmpty(t *testing.T) {
 
 func TestBuiltinLen(t *testing.T) {
 	testEval(t, `(len (list 1 2 3))`, IntVal(3))
-	testEval(t, `(len "hello")`, IntVal(5))
 }
 
 func TestBuiltinKeys(t *testing.T) {
@@ -336,12 +335,23 @@ func TestBuiltinMerge(t *testing.T) {
 
 // --- String ops ---
 
-func TestBuiltinSplit(t *testing.T) {
-	testEval(t, `(split "a,b,c" ",")`, ListVal([]Value{StringVal("a"), StringVal("b"), StringVal("c")}))
+func TestBuiltinSplitOnce(t *testing.T) {
+	// Basic match — splits on first occurrence only
+	testEval(t, `(split-once "," "a,b,c")`, ListVal([]Value{StringVal("a"), StringVal("b,c")}))
+	// No match → nil
+	testEval(t, `(split-once "x" "abc")`, NilVal())
+	// Match at start
+	testEval(t, `(split-once "a" "abc")`, ListVal([]Value{StringVal(""), StringVal("bc")}))
+	// Match at end
+	testEval(t, `(split-once "c" "abc")`, ListVal([]Value{StringVal("ab"), StringVal("")}))
+	// Whole string matches
+	testEval(t, `(split-once "abc" "abc")`, ListVal([]Value{StringVal(""), StringVal("")}))
+	// Multi-char needle
+	testEval(t, `(split-once "::" "a::b::c")`, ListVal([]Value{StringVal("a"), StringVal("b::c")}))
 }
 
-func TestBuiltinJoin(t *testing.T) {
-	testEval(t, `(join ", " (list "a" "b" "c"))`, StringVal("a, b, c"))
+func TestBuiltinSplitOnceEmptyNeedle(t *testing.T) {
+	testEvalError(t, `(split-once "" "abc")`)
 }
 
 // --- Keywords ---

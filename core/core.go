@@ -263,7 +263,7 @@ func (c *Core) coreManual(id string) map[string]any {
 				"and", "or", "not",
 				"cons", "nth", "append", "reverse", "uniq",
 				"put", "has?", "dissoc", "merge",
-				"split", "join",
+				"split-once",
 				"type",
 				"symbols", "node-expr", "ref-by",
 				"assert", "traces",
