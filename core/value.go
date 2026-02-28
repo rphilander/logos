@@ -22,6 +22,7 @@ const (
 	ValSymbol
 	ValNodeRef
 	ValForm
+	ValBuiltin
 )
 
 type FnValue struct {
@@ -33,14 +34,16 @@ type FnValue struct {
 }
 
 type Value struct {
-	Kind  ValueKind
-	Int   int64
-	Float float64
-	Bool  bool
-	Str   string
-	Fn    *FnValue
-	List  *[]Value
-	Map   *map[string]Value
+	Kind        ValueKind
+	Int         int64
+	Float       float64
+	Bool        bool
+	Str         string
+	Fn          *FnValue
+	List        *[]Value
+	Map         *map[string]Value
+	BuiltinName string
+	BuiltinFunc Builtin
 }
 
 func IntVal(n int64) Value     { return Value{Kind: ValInt, Int: n} }
@@ -62,6 +65,9 @@ func KeywordVal(s string) Value { return Value{Kind: ValKeyword, Str: s} }
 func SymbolVal(s string) Value  { return Value{Kind: ValSymbol, Str: s} }
 func NodeRefVal(s string) Value { return Value{Kind: ValNodeRef, Str: s} }
 func FormVal(fn *FnValue) Value { return Value{Kind: ValForm, Fn: fn} }
+func BuiltinVal(name string, fn Builtin) Value {
+	return Value{Kind: ValBuiltin, BuiltinName: name, BuiltinFunc: fn}
+}
 
 // Truthy implements nil-as-flow: nil and false are falsy, everything else is truthy.
 func (v Value) Truthy() bool {
@@ -144,6 +150,8 @@ func (v Value) String() string {
 			}
 		}
 		return "(dict " + strings.Join(parts, " ") + ")"
+	case ValBuiltin:
+		return fmt.Sprintf("<builtin:%s>", v.BuiltinName)
 	case ValNil:
 		return "nil"
 	default:
@@ -177,6 +185,8 @@ func (v Value) KindName() string {
 		return "NodeRef"
 	case ValForm:
 		return "Form"
+	case ValBuiltin:
+		return "Builtin"
 	default:
 		return "Unknown"
 	}
@@ -227,6 +237,8 @@ func ValuesEqual(a, b Value) bool {
 		return a.Str == b.Str
 	case ValNodeRef:
 		return a.Str == b.Str
+	case ValBuiltin:
+		return a.BuiltinName == b.BuiltinName
 	}
 	return false
 }
@@ -276,6 +288,8 @@ func ValueToGo(v Value) (any, error) {
 		return nil, fmt.Errorf("cannot serialize Fn to JSON")
 	case ValForm:
 		return nil, fmt.Errorf("cannot serialize Form to JSON")
+	case ValBuiltin:
+		return "builtin:" + v.BuiltinName, nil
 	default:
 		return nil, fmt.Errorf("unknown value kind")
 	}
@@ -296,6 +310,9 @@ func GoToValue(v any) Value {
 	case string:
 		if strings.HasPrefix(val, "node:") {
 			return NodeRefVal(val)
+		}
+		if strings.HasPrefix(val, "builtin:") {
+			return Value{Kind: ValBuiltin, BuiltinName: val[8:]}
 		}
 		if strings.HasPrefix(val, "sym:") {
 			return SymbolVal(val[4:])

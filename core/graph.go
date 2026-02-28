@@ -154,6 +154,13 @@ func (g *Graph) Define(name, expr string) (*GraphNode, error) {
 		return nil, fmt.Errorf("define: symbol name cannot contain '/': %s", name)
 	}
 
+	// Guard rail: reject builtin names
+	if g.eval.Builtins != nil {
+		if _, ok := g.eval.Builtins[name]; ok {
+			return nil, fmt.Errorf("define: cannot redefine builtin: %s", name)
+		}
+	}
+
 	// Guard rail: check symbol ownership
 	if owner, exists := g.symbolOwner[name]; exists && owner != g.activeLib {
 		if owner == "" {

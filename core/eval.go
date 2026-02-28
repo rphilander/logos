@@ -585,6 +585,31 @@ func (e *Evaluator) evalLoopWith(startNode *Node, stack []frame, startTail bool)
 				evaluating = true
 				continue
 			}
+			if result.Kind == ValBuiltin {
+				// Builtin resolved via computed head — evaluate args then call
+				builtinFn := result.BuiltinFunc
+				if len(argNodes) == 0 {
+					val, err := builtinFn(nil)
+					if err != nil {
+						e.locals = e.locals[:savedLocalsLen]
+						e.currentNodeID = savedNodeID
+						return Value{}, err
+					}
+					result = val
+					continue
+				}
+				stack = append(stack, frame{
+					kind:        frameBuiltinArg,
+					builtin:     builtinFn,
+					builtinDone: make([]Value, 0, len(argNodes)),
+					builtinArgs: argNodes,
+					builtinIdx:  0,
+				})
+				node = argNodes[0]
+				tail = false // args are not in tail position
+				evaluating = true
+				continue
+			}
 			if headNode.Kind == NodeSymbol {
 				e.locals = e.locals[:savedLocalsLen]
 				e.currentNodeID = savedNodeID
@@ -916,6 +941,11 @@ func (e *Evaluator) resolveSymbol(name string) (Value, error) {
 	if e.Resolve != nil {
 		if val, ok := e.Resolve(name); ok {
 			return val, nil
+		}
+	}
+	if e.Builtins != nil {
+		if fn, ok := e.Builtins[name]; ok {
+			return BuiltinVal(name, fn), nil
 		}
 	}
 	return Value{}, fmt.Errorf("unbound symbol: %s", name)
@@ -1365,6 +1395,8 @@ func builtinType(args []Value) (Value, error) {
 		return KeywordVal("symbol"), nil
 	case ValNodeRef:
 		return KeywordVal("node-ref"), nil
+	case ValBuiltin:
+		return KeywordVal("builtin"), nil
 	default:
 		return KeywordVal("unknown"), nil
 	}
@@ -1491,6 +1523,8 @@ func typeRank(k ValueKind) int {
 		return 10
 	case ValForm:
 		return 11
+	case ValBuiltin:
+		return 12
 	default:
 		return 99
 	}
@@ -1599,6 +1633,14 @@ func compareTwo(a, b Value) (int, error) {
 			return -1, nil
 		}
 		if as > bs {
+			return 1, nil
+		}
+		return 0, nil
+	case ValBuiltin:
+		if a.BuiltinName < b.BuiltinName {
+			return -1, nil
+		}
+		if a.BuiltinName > b.BuiltinName {
 			return 1, nil
 		}
 		return 0, nil

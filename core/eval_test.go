@@ -470,6 +470,7 @@ func TestBuiltinType(t *testing.T) {
 	testEval(t, `(type (list 1))`, KeywordVal("list"))
 	testEval(t, `(type (dict "a" 1))`, KeywordVal("map"))
 	testEval(t, `(type (fn (x) x))`, KeywordVal("fn"))
+	testEval(t, `(type add)`, KeywordVal("builtin"))
 }
 
 // --- Truthy ---
@@ -728,5 +729,48 @@ func TestValueTruthy(t *testing.T) {
 		if tc.val.Truthy() != tc.truthy {
 			t.Fatalf("%s.Truthy() = %v, want %v", tc.val.String(), tc.val.Truthy(), tc.truthy)
 		}
+	}
+}
+
+// --- ValBuiltin ---
+
+func TestValBuiltinType(t *testing.T) {
+	testEval(t, `(type add)`, KeywordVal("builtin"))
+	testEval(t, `(type list)`, KeywordVal("builtin"))
+	testEval(t, `(type concat)`, KeywordVal("builtin"))
+}
+
+func TestBuiltinAsValue(t *testing.T) {
+	// Builtin bound to a local, then called via computed head
+	testEval(t, `(let ((f add)) (f 1 2))`, IntVal(3))
+}
+
+func TestBuiltinHigherOrder(t *testing.T) {
+	// Pass builtin as argument to a fn
+	testEval(t, `((fn (f) (f 1 2)) add)`, IntVal(3))
+	testEval(t, `((fn (f) (f 10 3)) sub)`, IntVal(7))
+}
+
+func TestBuiltinEquality(t *testing.T) {
+	testEval(t, `(eq add add)`, BoolVal(true))
+	testEval(t, `(eq add sub)`, BoolVal(false))
+}
+
+func TestBuiltinNoArgComputedHead(t *testing.T) {
+	// Builtin with no args called via computed head
+	testEval(t, `(let ((f list)) (f))`, ListVal([]Value{}))
+}
+
+func TestBuiltinString(t *testing.T) {
+	v := BuiltinVal("add", nil)
+	if v.String() != "<builtin:add>" {
+		t.Fatalf("expected <builtin:add>, got %s", v.String())
+	}
+}
+
+func TestBuiltinKindName(t *testing.T) {
+	v := BuiltinVal("add", nil)
+	if v.KindName() != "Builtin" {
+		t.Fatalf("expected Builtin, got %s", v.KindName())
 	}
 }

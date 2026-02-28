@@ -1673,3 +1673,25 @@ func TestGraphRestParamsForm(t *testing.T) {
 		t.Fatalf("expected yes, got %s", val.String())
 	}
 }
+
+func TestDefineRejectsBuiltinName(t *testing.T) {
+	g := testGraph(t)
+	_, err := g.Define("add", "(fn (a b) 42)")
+	if err == nil {
+		t.Fatal("expected error defining builtin name")
+	}
+	if !strings.Contains(err.Error(), "cannot redefine builtin") {
+		t.Fatalf("unexpected error: %s", err.Error())
+	}
+}
+
+func TestDefineRejectsAllBuiltinNames(t *testing.T) {
+	g := testGraph(t)
+	// Spot-check several builtins
+	for _, name := range []string{"list", "sub", "eq", "head", "len", "type"} {
+		_, err := g.Define(name, "42")
+		if err == nil {
+			t.Fatalf("expected error defining builtin %q", name)
+		}
+	}
+}
