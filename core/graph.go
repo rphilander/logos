@@ -25,9 +25,11 @@ type Graph struct {
 	symbols      map[string]string
 	nameCounters map[string]int
 	eval         *Evaluator
-	logPath      string
+	dir          string
 	logFile      *os.File
-	preludePath  string
+	activeLib    string            // "" = session, else library name
+	libraries    []string          // ordered library names from manifest
+	symbolOwner  map[string]string // symbol name → library name ("" = session)
 }
 
 // coreFormKeywords are symbols that should not be resolved during define.
@@ -36,16 +38,41 @@ var coreFormKeywords = map[string]bool{
 	"apply": true, "sort-by": true,
 }
 
-func NewGraph(dir string, builtins map[string]Builtin) (*Graph, error) {
-	logPath := filepath.Join(dir, "log.logos")
-	preludePath := filepath.Join(dir, "prelude.logos")
+// --- Path helpers ---
 
+func (g *Graph) sessionLogPath() string {
+	return filepath.Join(g.dir, "log.logos")
+}
+
+func (g *Graph) libraryPath(name string) string {
+	return filepath.Join(g.dir, name+".logos")
+}
+
+func (g *Graph) manifestPath() string {
+	return filepath.Join(g.dir, "library-order.txt")
+}
+
+// makeNodeID generates a node ID with library prefix when applicable.
+func (g *Graph) makeNodeID(name, libName string) string {
+	g.nameCounters[name]++
+	if libName != "" {
+		return fmt.Sprintf("node:%s/%s-%d", libName, name, g.nameCounters[name])
+	}
+	return fmt.Sprintf("node:%s-%d", name, g.nameCounters[name])
+}
+
+// ActiveLibrary returns the currently active library name, or "" for session.
+func (g *Graph) ActiveLibrary() string {
+	return g.activeLib
+}
+
+func NewGraph(dir string, builtins map[string]Builtin) (*Graph, error) {
 	g := &Graph{
 		nodes:        make(map[string]*GraphNode),
 		symbols:      make(map[string]string),
 		nameCounters: make(map[string]int),
-		logPath:      logPath,
-		preludePath:  preludePath,
+		symbolOwner:  make(map[string]string),
+		dir:          dir,
 	}
 
 	// Register graph builtins as closures over the graph.
@@ -61,15 +88,15 @@ func NewGraph(dir string, builtins map[string]Builtin) (*Graph, error) {
 	builtins["assert"] = ev.builtinAssert
 	g.eval = ev
 
-	if err := g.loadPrelude(); err != nil {
-		return nil, fmt.Errorf("prelude: %w", err)
+	if err := g.loadLibraries(); err != nil {
+		return nil, fmt.Errorf("libraries: %w", err)
 	}
 
-	if err := g.replay(); err != nil {
-		return nil, fmt.Errorf("replay: %w", err)
+	if err := g.replayFile(g.sessionLogPath(), ""); err != nil {
+		return nil, fmt.Errorf("replay session: %w", err)
 	}
 
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(g.sessionLogPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("open log: %w", err)
 	}
@@ -123,6 +150,17 @@ func (g *Graph) Define(name, expr string) (*GraphNode, error) {
 	if strings.Contains(name, ":") {
 		return nil, fmt.Errorf("define: symbol name cannot contain ':': %s", name)
 	}
+	if strings.Contains(name, "/") {
+		return nil, fmt.Errorf("define: symbol name cannot contain '/': %s", name)
+	}
+
+	// Guard rail: check symbol ownership
+	if owner, exists := g.symbolOwner[name]; exists && owner != g.activeLib {
+		if owner == "" {
+			return nil, fmt.Errorf("define: %s is defined in session; close the library to modify it", name)
+		}
+		return nil, fmt.Errorf("define: %s is defined in library %q; open that library to modify it", name, owner)
+	}
 
 	parsed, err := Parse(expr)
 	if err != nil {
@@ -132,8 +170,7 @@ func (g *Graph) Define(name, expr string) (*GraphNode, error) {
 	var refs []Ref
 	resolved := g.resolveAST(parsed, &refs, nil)
 
-	g.nameCounters[name]++
-	nodeID := fmt.Sprintf("node:%s-%d", name, g.nameCounters[name])
+	nodeID := g.makeNodeID(name, g.activeLib)
 
 	node := &GraphNode{
 		ID:     nodeID,
@@ -143,6 +180,7 @@ func (g *Graph) Define(name, expr string) (*GraphNode, error) {
 	}
 	g.nodes[node.ID] = node
 	g.symbols[name] = node.ID
+	g.symbolOwner[name] = g.activeLib
 
 	if err := g.appendLog(fmt.Sprintf("(define %s %s)", name, expr)); err != nil {
 		return nil, fmt.Errorf("write log: %w", err)
@@ -156,7 +194,17 @@ func (g *Graph) Delete(name string) error {
 	if !ok {
 		return fmt.Errorf("undefined symbol: %s", name)
 	}
+
+	// Guard rail: check symbol ownership
+	if owner, exists := g.symbolOwner[name]; exists && owner != g.activeLib {
+		if owner == "" {
+			return fmt.Errorf("delete: %s is defined in session; close the library to modify it", name)
+		}
+		return fmt.Errorf("delete: %s is defined in library %q; open that library to modify it", name, owner)
+	}
+
 	delete(g.symbols, name)
+	delete(g.symbolOwner, name)
 
 	if err := g.appendLog(fmt.Sprintf("(delete %s)", name)); err != nil {
 		return fmt.Errorf("write log: %w", err)
@@ -485,7 +533,7 @@ func (g *Graph) RefreshAll(targets []string, dry bool) (*RefreshResult, error) {
 		return &RefreshResult{Refreshed: refreshOrder}, nil
 	}
 
-	// Re-parse and re-resolve each dependent.
+	// Re-parse and re-resolve each dependent, logging to owning file.
 	for _, name := range refreshOrder {
 		currentNodeID := g.symbols[name]
 		node := g.nodes[currentNodeID]
@@ -498,8 +546,8 @@ func (g *Graph) RefreshAll(targets []string, dry bool) (*RefreshResult, error) {
 		var refs []Ref
 		resolved := g.resolveAST(parsed, &refs, nil)
 
-		g.nameCounters[name]++
-		newNodeID := fmt.Sprintf("node:%s-%d", name, g.nameCounters[name])
+		owner := g.symbolOwner[name]
+		newNodeID := g.makeNodeID(name, owner)
 
 		newNode := &GraphNode{
 			ID:     newNodeID,
@@ -510,7 +558,8 @@ func (g *Graph) RefreshAll(targets []string, dry bool) (*RefreshResult, error) {
 		g.nodes[newNodeID] = newNode
 		g.symbols[name] = newNodeID
 
-		if err := g.appendLog(fmt.Sprintf("(define %s %s)", name, node.Source)); err != nil {
+		// Log to the owning file
+		if err := g.appendLogToOwner(name, fmt.Sprintf("(define %s %s)", name, node.Source)); err != nil {
 			return nil, fmt.Errorf("refresh-all: log %s: %w", name, err)
 		}
 	}
@@ -518,32 +567,37 @@ func (g *Graph) RefreshAll(targets []string, dry bool) (*RefreshResult, error) {
 	return &RefreshResult{Refreshed: refreshOrder}, nil
 }
 
-// --- Prelude ---
-
-func (g *Graph) loadPrelude() error {
-	data, err := os.ReadFile(g.preludePath)
-	if os.IsNotExist(err) {
-		return nil
+// appendLogToOwner writes an entry to the log file that owns the given symbol.
+// If the owner is the currently active log, use the open file handle.
+// Otherwise, open the owner's file, append, and close.
+func (g *Graph) appendLogToOwner(name, entry string) error {
+	owner := g.symbolOwner[name]
+	if owner == g.activeLib {
+		// Writing to the currently active log file
+		return g.appendLog(entry)
 	}
+	// Need to write to a different file
+	var path string
+	if owner == "" {
+		path = g.sessionLogPath()
+	} else {
+		path = g.libraryPath(owner)
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
-
-	entries := splitLogEntries(string(data))
-	for _, entry := range entries {
-		if err := g.replayEntry(entry); err != nil {
-			return fmt.Errorf("replaying %q: %w", entry, err)
-		}
+	_, err = fmt.Fprintf(f, "%s\n\n", entry)
+	closeErr := f.Close()
+	if err != nil {
+		return err
 	}
-	return nil
+	return closeErr
 }
 
-type preludeEntry struct {
-	name string
-	expr string
-}
+// --- Libraries ---
 
-func readPreludeEntries(path string) ([]preludeEntry, error) {
+func readManifest(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -551,153 +605,43 @@ func readPreludeEntries(path string) ([]preludeEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw := splitLogEntries(string(data))
-	var entries []preludeEntry
-	for _, s := range raw {
-		node, err := Parse(s)
-		if err != nil {
-			return nil, fmt.Errorf("parse prelude entry %q: %w", s, err)
+	var names []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			names = append(names, line)
 		}
-		if node.Kind != NodeList || len(node.Children) < 3 {
-			return nil, fmt.Errorf("invalid prelude entry: %s", s)
-		}
-		if node.Children[0].Kind != NodeSymbol || node.Children[0].Str != "define" {
-			return nil, fmt.Errorf("prelude entry must be define: %s", s)
-		}
-		name := node.Children[1].Str
-		expr := extractDefineExpr(s)
-		entries = append(entries, preludeEntry{name: name, expr: expr})
-	}
-	return entries, nil
-}
-
-func writePreludeEntries(path string, entries []preludeEntry) error {
-	var sb strings.Builder
-	for _, e := range entries {
-		fmt.Fprintf(&sb, "(define %s %s)\n\n", e.name, e.expr)
-	}
-	return os.WriteFile(path, []byte(sb.String()), 0644)
-}
-
-func (g *Graph) PreludeAdd(name string) error {
-	nodeID, ok := g.symbols[name]
-	if !ok {
-		return fmt.Errorf("prelude-add: undefined symbol: %s", name)
-	}
-	node := g.nodes[nodeID]
-
-	// Check that all refs are builtins or already in prelude
-	entries, err := readPreludeEntries(g.preludePath)
-	if err != nil {
-		return fmt.Errorf("prelude-add: %w", err)
-	}
-	preludeNames := make(map[string]bool)
-	for _, e := range entries {
-		preludeNames[e.name] = true
-	}
-	for _, ref := range node.Refs {
-		sym := ref.Symbol
-		if _, isBuiltin := g.eval.Builtins[sym]; isBuiltin {
-			continue
-		}
-		if preludeNames[sym] {
-			continue
-		}
-		return fmt.Errorf("prelude-add: dependency %q is not a builtin or in the prelude", sym)
-	}
-
-	// Replace or append
-	found := false
-	for i, e := range entries {
-		if e.name == name {
-			entries[i].expr = node.Source
-			found = true
-			break
-		}
-	}
-	if !found {
-		entries = append(entries, preludeEntry{name: name, expr: node.Source})
-	}
-
-	return writePreludeEntries(g.preludePath, entries)
-}
-
-func (g *Graph) PreludeRemove(name string) error {
-	entries, err := readPreludeEntries(g.preludePath)
-	if err != nil {
-		return fmt.Errorf("prelude-remove: %w", err)
-	}
-
-	found := false
-	var filtered []preludeEntry
-	for _, e := range entries {
-		if e.name == name {
-			found = true
-			continue
-		}
-		filtered = append(filtered, e)
-	}
-	if !found {
-		return fmt.Errorf("prelude-remove: %q not in prelude", name)
-	}
-
-	return writePreludeEntries(g.preludePath, filtered)
-}
-
-func (g *Graph) PreludeList() ([]string, error) {
-	entries, err := readPreludeEntries(g.preludePath)
-	if err != nil {
-		return nil, fmt.Errorf("prelude-list: %w", err)
-	}
-	names := make([]string, len(entries))
-	for i, e := range entries {
-		names[i] = e.name
 	}
 	return names, nil
 }
 
-// --- Clear ---
-
-func (g *Graph) Clear() error {
-	// Close current log file
-	if g.logFile != nil {
-		g.logFile.Close()
-		g.logFile = nil
+func writeManifest(path string, names []string) error {
+	var sb strings.Builder
+	for _, name := range names {
+		sb.WriteString(name)
+		sb.WriteByte('\n')
 	}
+	return os.WriteFile(path, []byte(sb.String()), 0644)
+}
 
-	// Truncate log
-	if err := os.Remove(g.logPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("clear: remove log: %w", err)
-	}
-
-	// Reset graph state
-	g.nodes = make(map[string]*GraphNode)
-	g.symbols = make(map[string]string)
-	g.nameCounters = make(map[string]int)
-
-	// Reload prelude
-	if err := g.loadPrelude(); err != nil {
-		return fmt.Errorf("clear: reload prelude: %w", err)
-	}
-
-	// Reopen log file
-	f, err := os.OpenFile(g.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+func (g *Graph) loadLibraries() error {
+	names, err := readManifest(g.manifestPath())
 	if err != nil {
-		return fmt.Errorf("clear: reopen log: %w", err)
+		return err
 	}
-	g.logFile = f
+	g.libraries = names
+
+	for _, name := range names {
+		path := g.libraryPath(name)
+		if err := g.replayFile(path, name); err != nil {
+			return fmt.Errorf("library %q: %w", name, err)
+		}
+	}
 	return nil
 }
 
-// --- Log ---
-
-func (g *Graph) appendLog(entry string) error {
-	_, err := fmt.Fprintf(g.logFile, "%s\n\n", entry)
-	return err
-}
-
-func (g *Graph) replay() error {
-	data, err := os.ReadFile(g.logPath)
+func (g *Graph) replayFile(path, libName string) error {
+	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -707,14 +651,14 @@ func (g *Graph) replay() error {
 
 	entries := splitLogEntries(string(data))
 	for _, entry := range entries {
-		if err := g.replayEntry(entry); err != nil {
+		if err := g.replayEntryForLib(entry, libName); err != nil {
 			return fmt.Errorf("replaying %q: %w", entry, err)
 		}
 	}
 	return nil
 }
 
-func (g *Graph) replayEntry(entry string) error {
+func (g *Graph) replayEntryForLib(entry, libName string) error {
 	node, err := Parse(entry)
 	if err != nil {
 		return err
@@ -750,8 +694,7 @@ func (g *Graph) replayEntry(entry string) error {
 		var refs []Ref
 		resolved := g.resolveAST(parsed, &refs, nil)
 
-		g.nameCounters[name]++
-		nodeID := fmt.Sprintf("node:%s-%d", name, g.nameCounters[name])
+		nodeID := g.makeNodeID(name, libName)
 
 		n := &GraphNode{
 			ID:     nodeID,
@@ -761,6 +704,7 @@ func (g *Graph) replayEntry(entry string) error {
 		}
 		g.nodes[n.ID] = n
 		g.symbols[name] = n.ID
+		g.symbolOwner[name] = libName
 		return nil
 
 	case "delete":
@@ -772,11 +716,257 @@ func (g *Graph) replayEntry(entry string) error {
 			return fmt.Errorf("delete name must be symbol: %s", entry)
 		}
 		delete(g.symbols, nameNode.Str)
+		delete(g.symbolOwner, nameNode.Str)
 		return nil
 
 	default:
 		return fmt.Errorf("unknown log command: %s", cmd.Str)
 	}
+}
+
+func (g *Graph) LibraryCreate(name string) error {
+	if strings.Contains(name, "/") || strings.Contains(name, ":") {
+		return fmt.Errorf("library-create: invalid library name: %s", name)
+	}
+	if name == "" {
+		return fmt.Errorf("library-create: name cannot be empty")
+	}
+	// Check if already exists
+	for _, lib := range g.libraries {
+		if lib == name {
+			return fmt.Errorf("library-create: library %q already exists", name)
+		}
+	}
+	// Create empty file
+	path := g.libraryPath(name)
+	if err := os.WriteFile(path, []byte{}, 0644); err != nil {
+		return fmt.Errorf("library-create: %w", err)
+	}
+	// Append to manifest
+	g.libraries = append(g.libraries, name)
+	if err := writeManifest(g.manifestPath(), g.libraries); err != nil {
+		return fmt.Errorf("library-create: write manifest: %w", err)
+	}
+	return nil
+}
+
+func (g *Graph) LibraryDelete(name string) error {
+	// Check library exists
+	found := false
+	for _, lib := range g.libraries {
+		if lib == name {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("library-delete: library %q not found", name)
+	}
+	// Check not currently open
+	if g.activeLib == name {
+		return fmt.Errorf("library-delete: library %q is currently open; close it first", name)
+	}
+	// Check no symbols owned
+	for sym, owner := range g.symbolOwner {
+		if owner == name {
+			return fmt.Errorf("library-delete: library %q still owns symbol %q; delete it first", name, sym)
+		}
+	}
+	// Remove from manifest
+	var filtered []string
+	for _, lib := range g.libraries {
+		if lib != name {
+			filtered = append(filtered, lib)
+		}
+	}
+	g.libraries = filtered
+	if err := writeManifest(g.manifestPath(), g.libraries); err != nil {
+		return fmt.Errorf("library-delete: write manifest: %w", err)
+	}
+	// Remove file
+	if err := os.Remove(g.libraryPath(name)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("library-delete: remove file: %w", err)
+	}
+	return nil
+}
+
+func (g *Graph) LibraryOpen(name string) error {
+	// Check library exists in manifest
+	found := false
+	for _, lib := range g.libraries {
+		if lib == name {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("library-open: library %q not found in manifest", name)
+	}
+	if g.activeLib != "" {
+		return fmt.Errorf("library-open: library %q is already open; close it first", g.activeLib)
+	}
+	// Close session log file
+	if g.logFile != nil {
+		g.logFile.Close()
+		g.logFile = nil
+	}
+	// Open library file for appending
+	f, err := os.OpenFile(g.libraryPath(name), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		// Try to reopen session log on error
+		sf, _ := os.OpenFile(g.sessionLogPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		g.logFile = sf
+		return fmt.Errorf("library-open: %w", err)
+	}
+	g.logFile = f
+	g.activeLib = name
+	return nil
+}
+
+func (g *Graph) LibraryClose() error {
+	if g.activeLib == "" {
+		return fmt.Errorf("library-close: no library is open")
+	}
+	// Close library file
+	if g.logFile != nil {
+		g.logFile.Close()
+		g.logFile = nil
+	}
+	g.activeLib = ""
+	// Reopen session log
+	f, err := os.OpenFile(g.sessionLogPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("library-close: reopen session log: %w", err)
+	}
+	g.logFile = f
+	return nil
+}
+
+func (g *Graph) LibraryCompact(name string) error {
+	// Check library exists
+	found := false
+	for _, lib := range g.libraries {
+		if lib == name {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("library-compact: library %q not found", name)
+	}
+	// Must not be currently open
+	if g.activeLib == name {
+		return fmt.Errorf("library-compact: library %q is currently open; close it first", name)
+	}
+
+	path := g.libraryPath(name)
+
+	// Read current file to get define order
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("library-compact: %w", err)
+	}
+
+	entries := splitLogEntries(string(data))
+
+	// Track which symbols we've already seen (preserve first occurrence order)
+	seen := make(map[string]bool)
+	var orderedNames []string
+	for _, entry := range entries {
+		node, err := Parse(entry)
+		if err != nil {
+			continue
+		}
+		if node.Kind != NodeList || len(node.Children) < 3 {
+			continue
+		}
+		if node.Children[0].Kind != NodeSymbol || node.Children[0].Str != "define" {
+			continue
+		}
+		symName := node.Children[1].Str
+		if !seen[symName] {
+			seen[symName] = true
+			orderedNames = append(orderedNames, symName)
+		}
+	}
+
+	// Write only live symbols in their original define order
+	var sb strings.Builder
+	for _, symName := range orderedNames {
+		owner, ownerExists := g.symbolOwner[symName]
+		if !ownerExists || owner != name {
+			continue // symbol was deleted or moved
+		}
+		nodeID, symExists := g.symbols[symName]
+		if !symExists {
+			continue
+		}
+		node := g.nodes[nodeID]
+		fmt.Fprintf(&sb, "(define %s %s)\n\n", symName, node.Source)
+	}
+
+	return os.WriteFile(path, []byte(sb.String()), 0644)
+}
+
+func (g *Graph) LibraryOrder() []string {
+	result := make([]string, len(g.libraries))
+	copy(result, g.libraries)
+	return result
+}
+
+func (g *Graph) LibraryOrderSet(names []string) error {
+	// Validate all names have corresponding files
+	for _, name := range names {
+		path := g.libraryPath(name)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return fmt.Errorf("library-order-set: library file not found for %q", name)
+		}
+	}
+	g.libraries = make([]string, len(names))
+	copy(g.libraries, names)
+	return writeManifest(g.manifestPath(), g.libraries)
+}
+
+// --- Clear ---
+
+func (g *Graph) Clear() error {
+	// Close current log file
+	if g.logFile != nil {
+		g.logFile.Close()
+		g.logFile = nil
+	}
+
+	// Truncate session log
+	if err := os.Remove(g.sessionLogPath()); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("clear: remove log: %w", err)
+	}
+
+	// Reset graph state
+	g.nodes = make(map[string]*GraphNode)
+	g.symbols = make(map[string]string)
+	g.nameCounters = make(map[string]int)
+	g.symbolOwner = make(map[string]string)
+	g.activeLib = ""
+
+	// Reload libraries
+	if err := g.loadLibraries(); err != nil {
+		return fmt.Errorf("clear: reload libraries: %w", err)
+	}
+
+	// Reopen session log file
+	f, err := os.OpenFile(g.sessionLogPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("clear: reopen log: %w", err)
+	}
+	g.logFile = f
+	return nil
+}
+
+// --- Log ---
+
+func (g *Graph) appendLog(entry string) error {
+	_, err := fmt.Fprintf(g.logFile, "%s\n\n", entry)
+	return err
 }
 
 func extractDefineExpr(entry string) string {

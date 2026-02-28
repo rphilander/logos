@@ -179,30 +179,47 @@ func (c *Core) handleRequest(msg map[string]any) map[string]any {
 		return c.coreManual(id)
 	}
 
+	var resp map[string]any
 	switch op {
 	case "eval":
-		return c.handleEval(id, msg)
+		resp = c.handleEval(id, msg)
 	case "define":
-		return c.handleDefine(id, msg)
+		resp = c.handleDefine(id, msg)
 	case "delete":
-		return c.handleDelete(id, msg)
+		resp = c.handleDelete(id, msg)
 	case "refresh-all":
-		return c.handleRefreshAll(id, msg)
-	case "prelude-add":
-		return c.handlePreludeAdd(id, msg)
-	case "prelude-remove":
-		return c.handlePreludeRemove(id, msg)
-	case "prelude-list":
-		return c.handlePreludeList(id, msg)
+		resp = c.handleRefreshAll(id, msg)
+	case "library-create":
+		resp = c.handleLibraryCreate(id, msg)
+	case "library-delete":
+		resp = c.handleLibraryDelete(id, msg)
+	case "library-open":
+		resp = c.handleLibraryOpen(id, msg)
+	case "library-close":
+		resp = c.handleLibraryClose(id, msg)
+	case "library-compact":
+		resp = c.handleLibraryCompact(id, msg)
+	case "library-order":
+		resp = c.handleLibraryOrder(id, msg)
+	case "library-order-set":
+		resp = c.handleLibraryOrderSet(id, msg)
 	case "clear":
-		return c.handleClear(id, msg)
+		resp = c.handleClear(id, msg)
 	case "set-fuel":
-		return c.handleSetFuel(id, msg)
+		resp = c.handleSetFuel(id, msg)
 	case "get-fuel":
-		return c.handleGetFuel(id, msg)
+		resp = c.handleGetFuel(id, msg)
 	default:
-		return errorResponse(id, fmt.Sprintf("unknown op: %s", op))
+		resp = errorResponse(id, fmt.Sprintf("unknown op: %s", op))
 	}
+	// Include active_library in every response
+	activeLib := c.graph.ActiveLibrary()
+	if activeLib == "" {
+		resp["active_library"] = "session"
+	} else {
+		resp["active_library"] = activeLib
+	}
+	return resp
 }
 
 func (c *Core) handleCallbackRequest(msg map[string]any) map[string]any {
@@ -253,16 +270,20 @@ func (c *Core) coreManual(id string) map[string]any {
 			"name":    "logos-core",
 			"version": "3.0.0",
 			"ops": map[string]any{
-				"eval":          "Evaluate a logos expression. Params: expr (string)",
-				"define":        "Define a named symbol. Params: name (string), expr (string)",
-				"delete":        "Delete a named symbol. Params: name (string)",
-				"refresh-all":   "Re-resolve dependents of target symbols. Params: targets ([]string), dry (bool, optional)",
-				"prelude-add":   "Promote a symbol to the prelude. Params: name (string)",
-				"prelude-remove": "Remove a symbol from the prelude. Params: name (string)",
-				"prelude-list":  "List all symbols in the prelude.",
-				"clear":         "Clear session: truncate log, reset graph, reload prelude.",
-				"set-fuel":      "Set global eval fuel limit. Params: fuel (int, 0=unlimited)",
-				"get-fuel":      "Get current fuel limit.",
+				"eval":              "Evaluate a logos expression. Params: expr (string)",
+				"define":            "Define a named symbol. Params: name (string), expr (string)",
+				"delete":            "Delete a named symbol. Params: name (string)",
+				"refresh-all":       "Re-resolve dependents of target symbols. Params: targets ([]string), dry (bool, optional)",
+				"library-create":    "Create a new library. Params: name (string)",
+				"library-delete":    "Delete an empty library. Params: name (string)",
+				"library-open":      "Open a library for writing. Params: name (string)",
+				"library-close":     "Close the open library, return to session.",
+				"library-compact":   "Rewrite a library to only live definitions. Params: name (string)",
+				"library-order":     "Return the ordered list of libraries.",
+				"library-order-set": "Set the library load order. Params: names ([]string)",
+				"clear":             "Clear session: truncate log, reset graph, reload libraries.",
+				"set-fuel":          "Set global eval fuel limit. Params: fuel (int, 0=unlimited)",
+				"get-fuel":          "Get current fuel limit.",
 			},
 			"builtins": []any{
 				"list", "dict", "get", "head", "rest", "len", "keys",
@@ -381,31 +402,80 @@ func (c *Core) handleRefreshAll(id string, msg map[string]any) map[string]any {
 	}
 }
 
-func (c *Core) handlePreludeAdd(id string, msg map[string]any) map[string]any {
+func (c *Core) handleLibraryCreate(id string, msg map[string]any) map[string]any {
 	name, ok := msg["name"].(string)
 	if !ok {
-		return errorResponse(id, "prelude-add: missing 'name' string")
+		return errorResponse(id, "library-create: missing 'name' string")
 	}
-	if err := c.graph.PreludeAdd(name); err != nil {
+	if err := c.graph.LibraryCreate(name); err != nil {
 		return errorResponse(id, err.Error())
 	}
 	return map[string]any{"id": id, "ok": true, "value": name}
 }
 
-func (c *Core) handlePreludeRemove(id string, msg map[string]any) map[string]any {
+func (c *Core) handleLibraryDelete(id string, msg map[string]any) map[string]any {
 	name, ok := msg["name"].(string)
 	if !ok {
-		return errorResponse(id, "prelude-remove: missing 'name' string")
+		return errorResponse(id, "library-delete: missing 'name' string")
 	}
-	if err := c.graph.PreludeRemove(name); err != nil {
+	if err := c.graph.LibraryDelete(name); err != nil {
 		return errorResponse(id, err.Error())
 	}
 	return map[string]any{"id": id, "ok": true, "value": name}
 }
 
-func (c *Core) handlePreludeList(id string, msg map[string]any) map[string]any {
-	names, err := c.graph.PreludeList()
-	if err != nil {
+func (c *Core) handleLibraryOpen(id string, msg map[string]any) map[string]any {
+	name, ok := msg["name"].(string)
+	if !ok {
+		return errorResponse(id, "library-open: missing 'name' string")
+	}
+	if err := c.graph.LibraryOpen(name); err != nil {
+		return errorResponse(id, err.Error())
+	}
+	return map[string]any{"id": id, "ok": true, "value": name}
+}
+
+func (c *Core) handleLibraryClose(id string, msg map[string]any) map[string]any {
+	if err := c.graph.LibraryClose(); err != nil {
+		return errorResponse(id, err.Error())
+	}
+	return map[string]any{"id": id, "ok": true, "value": "session"}
+}
+
+func (c *Core) handleLibraryCompact(id string, msg map[string]any) map[string]any {
+	name, ok := msg["name"].(string)
+	if !ok {
+		return errorResponse(id, "library-compact: missing 'name' string")
+	}
+	if err := c.graph.LibraryCompact(name); err != nil {
+		return errorResponse(id, err.Error())
+	}
+	return map[string]any{"id": id, "ok": true, "value": name}
+}
+
+func (c *Core) handleLibraryOrder(id string, msg map[string]any) map[string]any {
+	order := c.graph.LibraryOrder()
+	result := make([]any, len(order))
+	for i, n := range order {
+		result[i] = n
+	}
+	return map[string]any{"id": id, "ok": true, "value": result}
+}
+
+func (c *Core) handleLibraryOrderSet(id string, msg map[string]any) map[string]any {
+	namesRaw, ok := msg["names"].([]any)
+	if !ok {
+		return errorResponse(id, "library-order-set: missing 'names' array")
+	}
+	names := make([]string, len(namesRaw))
+	for i, n := range namesRaw {
+		s, ok := n.(string)
+		if !ok {
+			return errorResponse(id, fmt.Sprintf("library-order-set: name %d must be string", i))
+		}
+		names[i] = s
+	}
+	if err := c.graph.LibraryOrderSet(names); err != nil {
 		return errorResponse(id, err.Error())
 	}
 	result := make([]any, len(names))

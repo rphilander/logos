@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -19,7 +20,7 @@ func testGraph(t *testing.T) *Graph {
 	return g
 }
 
-const hofPrelude = `(define nil? (fn (x) (eq (type x) :nil)))
+const hofLibrary = `(define nil? (fn (x) (eq (type x) :nil)))
 
 (define empty? (fn (xs) (eq (len xs) 0)))
 
@@ -38,7 +39,7 @@ const hofPrelude = `(define nil? (fn (x) (eq (type x) :nil)))
 (define group-by (fn (f xs) (fold (fn (acc x) (let ((k (to-string (f x))) (existing (get acc k))) (put acc k (if (nil? existing) (list x) (append existing (list x)))))) (dict) xs)))
 `
 
-const formPrelude = `(define not (fn (x) (if x false true)))
+const formLibrary = `(define not (fn (x) (if x false true)))
 
 (define nil? (fn (x) (eq (type x) :nil)))
 
@@ -61,10 +62,11 @@ const formPrelude = `(define not (fn (x) (if x false true)))
 (define unless (form (test body) (list (quote if) test nil body)))
 `
 
-func testGraphWithPrelude(t *testing.T) *Graph {
+func testGraphWithLibrary(t *testing.T) *Graph {
 	t.Helper()
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "prelude.logos"), []byte(hofPrelude), 0644)
+	os.WriteFile(filepath.Join(dir, "base.logos"), []byte(hofLibrary), 0644)
+	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\n"), 0644)
 	g, err := NewGraph(dir, DataBuiltins())
 	if err != nil {
 		t.Fatal(err)
@@ -73,10 +75,11 @@ func testGraphWithPrelude(t *testing.T) *Graph {
 	return g
 }
 
-func testGraphWithFormPrelude(t *testing.T) *Graph {
+func testGraphWithFormLibrary(t *testing.T) *Graph {
 	t.Helper()
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "prelude.logos"), []byte(formPrelude), 0644)
+	os.WriteFile(filepath.Join(dir, "base.logos"), []byte(formLibrary), 0644)
+	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\n"), 0644)
 	g, err := NewGraph(dir, DataBuiltins())
 	if err != nil {
 		t.Fatal(err)
@@ -149,6 +152,14 @@ func TestGraphColonInName(t *testing.T) {
 	_, err := g.Define("bad:name", "1")
 	if err == nil {
 		t.Fatal("expected error for colon in name")
+	}
+}
+
+func TestGraphSlashInName(t *testing.T) {
+	g := testGraph(t)
+	_, err := g.Define("bad/name", "1")
+	if err == nil {
+		t.Fatal("expected error for slash in name")
 	}
 }
 
@@ -560,12 +571,12 @@ func TestGraphAssertPass(t *testing.T) {
 	}
 }
 
-// --- Prelude ---
+// --- Library ---
 
-func TestPreludeLoad(t *testing.T) {
+func TestLibraryLoad(t *testing.T) {
 	dir := t.TempDir()
-	// Write a prelude file
-	os.WriteFile(filepath.Join(dir, "prelude.logos"), []byte("(define x 42)\n\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "base.logos"), []byte("(define x 42)\n\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\n"), 0644)
 
 	g, err := NewGraph(dir, DataBuiltins())
 	if err != nil {
@@ -582,11 +593,12 @@ func TestPreludeLoad(t *testing.T) {
 	}
 }
 
-func TestPreludeLoadOrder(t *testing.T) {
+func TestLibraryLoadOrder(t *testing.T) {
 	dir := t.TempDir()
 	// A then B (B refs A)
-	os.WriteFile(filepath.Join(dir, "prelude.logos"),
+	os.WriteFile(filepath.Join(dir, "base.logos"),
 		[]byte("(define a 10)\n\n(define b (add a 1))\n\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\n"), 0644)
 
 	g, err := NewGraph(dir, DataBuiltins())
 	if err != nil {
@@ -603,12 +615,11 @@ func TestPreludeLoadOrder(t *testing.T) {
 	}
 }
 
-func TestPreludeOverrideByLog(t *testing.T) {
+func TestLibraryGuardRailBlocksSessionOverride(t *testing.T) {
 	dir := t.TempDir()
-	// Prelude defines x=1
-	os.WriteFile(filepath.Join(dir, "prelude.logos"), []byte("(define x 1)\n\n"), 0644)
-	// Log defines x=2
-	os.WriteFile(filepath.Join(dir, "log.logos"), []byte("(define x 2)\n\n"), 0644)
+	// Library defines x=1
+	os.WriteFile(filepath.Join(dir, "base.logos"), []byte("(define x 1)\n\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\n"), 0644)
 
 	g, err := NewGraph(dir, DataBuiltins())
 	if err != nil {
@@ -616,16 +627,136 @@ func TestPreludeOverrideByLog(t *testing.T) {
 	}
 	defer g.Close()
 
+	// Session tries to redefine x — should ERROR (guard rail)
+	_, err = g.Define("x", "2")
+	if err == nil {
+		t.Fatal("expected error: guard rail should block session override of library symbol")
+	}
+	if !strings.Contains(err.Error(), "defined in library") {
+		t.Fatalf("expected guard rail error, got: %v", err)
+	}
+
+	// x should still be 1
 	val, err := g.Eval("x")
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !ValuesEqual(val, IntVal(1)) {
+		t.Fatalf("expected 1, got %s", val.String())
+	}
+}
+
+func TestLibraryCreateAndList(t *testing.T) {
+	dir := t.TempDir()
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	// Create a library
+	if err := g.LibraryCreate("test-lib"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify it's in the order
+	order := g.LibraryOrder()
+	if len(order) != 1 || order[0] != "test-lib" {
+		t.Fatalf("expected [test-lib], got %v", order)
+	}
+
+	// Verify manifest file
+	data, err := os.ReadFile(filepath.Join(dir, "library-order.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(data)) != "test-lib" {
+		t.Fatalf("expected manifest to contain 'test-lib', got %q", string(data))
+	}
+
+	// Verify library file exists
+	if _, err := os.Stat(filepath.Join(dir, "test-lib.logos")); err != nil {
+		t.Fatalf("expected library file to exist: %v", err)
+	}
+}
+
+func TestLibraryOpenDefineClose(t *testing.T) {
+	dir := t.TempDir()
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	g.LibraryCreate("mylib")
+	if err := g.LibraryOpen("mylib"); err != nil {
+		t.Fatal(err)
+	}
+
+	// activeLib should be set
+	if g.ActiveLibrary() != "mylib" {
+		t.Fatalf("expected active library 'mylib', got %q", g.ActiveLibrary())
+	}
+
+	// Define a symbol — it should be owned by mylib
+	node, err := g.Define("foo", "42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Node ID should have library prefix
+	if !strings.HasPrefix(node.ID, "node:mylib/foo-") {
+		t.Fatalf("expected node ID with mylib prefix, got %s", node.ID)
+	}
+	// Check ownership
+	if g.symbolOwner["foo"] != "mylib" {
+		t.Fatalf("expected foo owned by mylib, got %q", g.symbolOwner["foo"])
+	}
+
+	// Close library
+	if err := g.LibraryClose(); err != nil {
+		t.Fatal(err)
+	}
+	if g.ActiveLibrary() != "" {
+		t.Fatalf("expected empty active library after close, got %q", g.ActiveLibrary())
+	}
+
+	// foo should still be evaluable
+	val, err := g.Eval("foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(42)) {
+		t.Fatalf("expected 42, got %s", val.String())
+	}
+}
+
+func TestLibraryGuardRailSameLibOK(t *testing.T) {
+	dir := t.TempDir()
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	g.LibraryCreate("mylib")
+	g.LibraryOpen("mylib")
+	g.Define("foo", "1")
+	// Redefine foo in the same library — should succeed
+	_, err = g.Define("foo", "2")
+	if err != nil {
+		t.Fatalf("expected no error redefining in same library, got %v", err)
+	}
+	val, err := g.Eval("foo")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ValuesEqual(val, IntVal(2)) {
-		t.Fatalf("expected 2 (log override), got %s", val.String())
+		t.Fatalf("expected 2, got %s", val.String())
 	}
+	g.LibraryClose()
 }
 
-func TestPreludeAddAndRemove(t *testing.T) {
+func TestLibraryGuardRailCrossLibError(t *testing.T) {
 	dir := t.TempDir()
 	g, err := NewGraph(dir, DataBuiltins())
 	if err != nil {
@@ -633,64 +764,47 @@ func TestPreludeAddAndRemove(t *testing.T) {
 	}
 	defer g.Close()
 
-	// Define a symbol
-	g.Define("x", "42")
+	g.LibraryCreate("mylib")
+	g.LibraryOpen("mylib")
+	g.Define("foo", "42")
+	g.LibraryClose()
 
-	// Add to prelude
-	if err := g.PreludeAdd("x"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Verify prelude file
-	names, err := g.PreludeList()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(names) != 1 || names[0] != "x" {
-		t.Fatalf("expected [x], got %v", names)
-	}
-
-	// Verify prelude file content
-	data, err := os.ReadFile(filepath.Join(dir, "prelude.logos"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "(define x 42)\n\n" {
-		t.Fatalf("unexpected prelude content: %q", string(data))
-	}
-
-	// Remove from prelude
-	if err := g.PreludeRemove("x"); err != nil {
-		t.Fatal(err)
-	}
-	names, err = g.PreludeList()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(names) != 0 {
-		t.Fatalf("expected empty, got %v", names)
-	}
-}
-
-func TestPreludeAddMissingDep(t *testing.T) {
-	dir := t.TempDir()
-	g, err := NewGraph(dir, DataBuiltins())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer g.Close()
-
-	// Define a, then b depending on a (a not in prelude)
-	g.Define("a", "10")
-	g.Define("b", "a")
-
-	err = g.PreludeAdd("b")
+	// Session tries to define foo — should fail
+	_, err = g.Define("foo", "99")
 	if err == nil {
-		t.Fatal("expected error: dependency 'a' not in prelude")
+		t.Fatal("expected guard rail error")
+	}
+	if !strings.Contains(err.Error(), "defined in library") {
+		t.Fatalf("expected guard rail error message, got: %v", err)
 	}
 }
 
-func TestPreludeAddChain(t *testing.T) {
+func TestLibraryNodeIDNamespacing(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "base.logos"), []byte("(define x 42)\n\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\n"), 0644)
+
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	// Library symbol should have namespaced node ID
+	nodeID := g.symbols["x"]
+	if nodeID != "node:base/x-1" {
+		t.Fatalf("expected node:base/x-1, got %s", nodeID)
+	}
+
+	// Session symbol should have normal node ID
+	g.Define("y", "99")
+	yNodeID := g.symbols["y"]
+	if yNodeID != "node:y-1" {
+		t.Fatalf("expected node:y-1, got %s", yNodeID)
+	}
+}
+
+func TestLibraryDeleteEmptyOK(t *testing.T) {
 	dir := t.TempDir()
 	g, err := NewGraph(dir, DataBuiltins())
 	if err != nil {
@@ -698,24 +812,136 @@ func TestPreludeAddChain(t *testing.T) {
 	}
 	defer g.Close()
 
-	g.Define("a", "10")
-	g.Define("b", "(add a 1)")
-
-	// Add a first
-	if err := g.PreludeAdd("a"); err != nil {
-		t.Fatal(err)
+	g.LibraryCreate("ephemeral")
+	if err := g.LibraryDelete("ephemeral"); err != nil {
+		t.Fatalf("expected no error deleting empty library, got %v", err)
 	}
-	// Now b's dep (a) is in prelude — should succeed
-	if err := g.PreludeAdd("b"); err != nil {
-		t.Fatal(err)
+	order := g.LibraryOrder()
+	if len(order) != 0 {
+		t.Fatalf("expected empty order, got %v", order)
 	}
+}
 
-	names, err := g.PreludeList()
+func TestLibraryDeleteNonEmptyError(t *testing.T) {
+	dir := t.TempDir()
+	g, err := NewGraph(dir, DataBuiltins())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(names) != 2 {
-		t.Fatalf("expected 2 entries, got %v", names)
+	defer g.Close()
+
+	g.LibraryCreate("mylib")
+	g.LibraryOpen("mylib")
+	g.Define("foo", "1")
+	g.LibraryClose()
+
+	err = g.LibraryDelete("mylib")
+	if err == nil {
+		t.Fatal("expected error deleting non-empty library")
+	}
+	if !strings.Contains(err.Error(), "still owns symbol") {
+		t.Fatalf("expected 'still owns' error, got: %v", err)
+	}
+}
+
+func TestLibraryCompact(t *testing.T) {
+	dir := t.TempDir()
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	g.LibraryCreate("mylib")
+	g.LibraryOpen("mylib")
+	g.Define("a", "1")
+	g.Define("b", "2")
+	g.Define("a", "10") // redefine a
+	g.Delete("b")       // delete b
+	g.Define("c", "3")
+	g.LibraryClose()
+
+	// Compact
+	if err := g.LibraryCompact("mylib"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read the file — should have only a=10 and c=3
+	data, err := os.ReadFile(filepath.Join(dir, "mylib.logos"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "(define a 10)") {
+		t.Fatalf("expected (define a 10) in compacted file, got:\n%s", content)
+	}
+	if !strings.Contains(content, "(define c 3)") {
+		t.Fatalf("expected (define c 3) in compacted file, got:\n%s", content)
+	}
+	if strings.Contains(content, "define b") {
+		t.Fatalf("expected no (define b ...) in compacted file, got:\n%s", content)
+	}
+	// a should come before c (original define order)
+	aIdx := strings.Index(content, "define a")
+	cIdx := strings.Index(content, "define c")
+	if aIdx > cIdx {
+		t.Fatalf("expected a before c in compacted file")
+	}
+}
+
+func TestLibraryOrderSet(t *testing.T) {
+	dir := t.TempDir()
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	g.LibraryCreate("alpha")
+	g.LibraryCreate("beta")
+
+	// Reverse order
+	if err := g.LibraryOrderSet([]string{"beta", "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	order := g.LibraryOrder()
+	if len(order) != 2 || order[0] != "beta" || order[1] != "alpha" {
+		t.Fatalf("expected [beta, alpha], got %v", order)
+	}
+}
+
+func TestLibraryPersistAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+
+	// First session: create library with symbol
+	g1, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g1.LibraryCreate("persist")
+	g1.LibraryOpen("persist")
+	g1.Define("stored", "999")
+	g1.LibraryClose()
+	g1.Close()
+
+	// Second session: verify symbol persists
+	g2, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g2.Close()
+
+	val, err := g2.Eval("stored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(999)) {
+		t.Fatalf("expected 999, got %s", val.String())
+	}
+
+	// Verify ownership persists
+	if g2.symbolOwner["stored"] != "persist" {
+		t.Fatalf("expected owner 'persist', got %q", g2.symbolOwner["stored"])
 	}
 }
 
@@ -755,19 +981,16 @@ func TestClear(t *testing.T) {
 	}
 }
 
-func TestClearPreservesPrelude(t *testing.T) {
+func TestClearPreservesLibraries(t *testing.T) {
 	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "base.logos"), []byte("(define a 10)\n\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\n"), 0644)
+
 	g, err := NewGraph(dir, DataBuiltins())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer g.Close()
-
-	// Define and promote to prelude
-	g.Define("a", "10")
-	if err := g.PreludeAdd("a"); err != nil {
-		t.Fatal(err)
-	}
 
 	// Define session-only symbol
 	g.Define("b", "20")
@@ -777,19 +1000,89 @@ func TestClearPreservesPrelude(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Prelude symbol survives
+	// Library symbol survives
 	val, err := g.Eval("a")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ValuesEqual(val, IntVal(10)) {
-		t.Fatalf("expected 10 from prelude, got %s", val.String())
+		t.Fatalf("expected 10 from library, got %s", val.String())
 	}
 
 	// Session symbol is gone
 	_, err = g.Eval("b")
 	if err == nil {
 		t.Fatal("expected error for b after clear")
+	}
+}
+
+func TestLibraryDeleteGuardRail(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "base.logos"), []byte("(define x 1)\n\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\n"), 0644)
+
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	// Try to delete library-owned symbol from session
+	err = g.Delete("x")
+	if err == nil {
+		t.Fatal("expected guard rail error")
+	}
+	if !strings.Contains(err.Error(), "defined in library") {
+		t.Fatalf("expected guard rail error, got: %v", err)
+	}
+}
+
+func TestLibraryRefreshAllCrossLibrary(t *testing.T) {
+	dir := t.TempDir()
+	// Library defines 'a'
+	os.WriteFile(filepath.Join(dir, "base.logos"), []byte("(define a 10)\n\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\n"), 0644)
+
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	// Session defines 'b' referencing 'a'
+	g.Define("b", "a")
+
+	val, _ := g.Eval("b")
+	if !ValuesEqual(val, IntVal(10)) {
+		t.Fatalf("expected 10, got %s", val.String())
+	}
+
+	// Open library, redefine 'a'
+	g.LibraryOpen("base")
+	g.Define("a", "20")
+	g.LibraryClose()
+
+	// b still stale
+	val, _ = g.Eval("b")
+	if !ValuesEqual(val, IntVal(10)) {
+		t.Fatalf("expected stale 10, got %s", val.String())
+	}
+
+	// Refresh — b is session, a is base library
+	result, err := g.RefreshAll([]string{"a"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Refreshed) != 1 || result.Refreshed[0] != "b" {
+		t.Fatalf("expected [b], got %v", result.Refreshed)
+	}
+
+	val, err = g.Eval("b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(20)) {
+		t.Fatalf("expected 20 after refresh, got %s", val.String())
 	}
 }
 
@@ -921,7 +1214,7 @@ func TestTailPositionDo(t *testing.T) {
 }
 
 func TestTailPositionCond(t *testing.T) {
-	g := testGraphWithFormPrelude(t)
+	g := testGraphWithFormLibrary(t)
 	g.Define("loop-cond", `(fn (n) (cond (lt n 1) 0 true (loop-cond (sub n 1))))`)
 	val, err := g.Eval(`(loop-cond 100000)`)
 	if err != nil {
@@ -933,7 +1226,7 @@ func TestTailPositionCond(t *testing.T) {
 }
 
 func TestTailPositionCase(t *testing.T) {
-	g := testGraphWithFormPrelude(t)
+	g := testGraphWithFormLibrary(t)
 	g.Define("loop-case", `(fn (n) (case (lt n 1) true 0 false (loop-case (sub n 1))))`)
 	val, err := g.Eval(`(loop-case 100000)`)
 	if err != nil {
@@ -964,10 +1257,10 @@ func TestMutualRecursion(t *testing.T) {
 	}
 }
 
-// --- Prelude higher-order function tests ---
+// --- Library higher-order function tests ---
 
-func TestPreludeMap(t *testing.T) {
-	g := testGraphWithPrelude(t)
+func TestLibraryMap(t *testing.T) {
+	g := testGraphWithLibrary(t)
 	val, err := g.Eval(`(map (fn (x) (add x 1)) (list 1 2 3))`)
 	if err != nil {
 		t.Fatal(err)
@@ -986,8 +1279,8 @@ func TestPreludeMap(t *testing.T) {
 	}
 }
 
-func TestPreludeFilter(t *testing.T) {
-	g := testGraphWithPrelude(t)
+func TestLibraryFilter(t *testing.T) {
+	g := testGraphWithLibrary(t)
 	val, err := g.Eval(`(filter (fn (x) (gt x 2)) (list 1 2 3 4))`)
 	if err != nil {
 		t.Fatal(err)
@@ -1006,8 +1299,8 @@ func TestPreludeFilter(t *testing.T) {
 	}
 }
 
-func TestPreludeFold(t *testing.T) {
-	g := testGraphWithPrelude(t)
+func TestLibraryFold(t *testing.T) {
+	g := testGraphWithLibrary(t)
 	val, err := g.Eval(`(fold (fn (acc x) (add acc x)) 0 (list 1 2 3))`)
 	if err != nil {
 		t.Fatal(err)
@@ -1025,8 +1318,8 @@ func TestPreludeFold(t *testing.T) {
 	}
 }
 
-func TestPreludeGroupBy(t *testing.T) {
-	g := testGraphWithPrelude(t)
+func TestLibraryGroupBy(t *testing.T) {
+	g := testGraphWithLibrary(t)
 	val, err := g.Eval(`(group-by (fn (x) (mod x 2)) (list 1 2 3 4))`)
 	if err != nil {
 		t.Fatal(err)
@@ -1040,8 +1333,8 @@ func TestPreludeGroupBy(t *testing.T) {
 	}
 }
 
-func TestPreludeHOFLargeList(t *testing.T) {
-	g := testGraphWithPrelude(t)
+func TestLibraryHOFLargeList(t *testing.T) {
+	g := testGraphWithLibrary(t)
 	// Build a large list via tail-recursive range
 	g.Define("range-acc", `(fn (n acc) (if (lt n 1) acc (range-acc (sub n 1) (cons n acc))))`)
 	g.Define("my-range", `(fn (n) (range-acc n (list)))`)
@@ -1157,10 +1450,10 @@ func TestGraphFormWithFnDependency(t *testing.T) {
 	}
 }
 
-// --- Prelude form tests ---
+// --- Library form tests ---
 
-func TestPreludeCond(t *testing.T) {
-	g := testGraphWithFormPrelude(t)
+func TestLibraryCond(t *testing.T) {
+	g := testGraphWithFormLibrary(t)
 	val, err := g.Eval(`(cond false 1 true 2)`)
 	if err != nil {
 		t.Fatal(err)
@@ -1202,8 +1495,8 @@ func TestPreludeCond(t *testing.T) {
 	}
 }
 
-func TestPreludeCase(t *testing.T) {
-	g := testGraphWithFormPrelude(t)
+func TestLibraryCase(t *testing.T) {
+	g := testGraphWithFormLibrary(t)
 	// Keyword match
 	val, err := g.Eval(`(case :b :a 1 :b 2 :c 3)`)
 	if err != nil {
@@ -1246,8 +1539,8 @@ func TestPreludeCase(t *testing.T) {
 	}
 }
 
-func TestPreludeWhen(t *testing.T) {
-	g := testGraphWithFormPrelude(t)
+func TestLibraryWhen(t *testing.T) {
+	g := testGraphWithFormLibrary(t)
 	val, err := g.Eval(`(when true 42)`)
 	if err != nil {
 		t.Fatal(err)
@@ -1264,8 +1557,8 @@ func TestPreludeWhen(t *testing.T) {
 	}
 }
 
-func TestPreludeUnless(t *testing.T) {
-	g := testGraphWithFormPrelude(t)
+func TestLibraryUnless(t *testing.T) {
+	g := testGraphWithFormLibrary(t)
 	val, err := g.Eval(`(unless false 99)`)
 	if err != nil {
 		t.Fatal(err)
@@ -1282,8 +1575,8 @@ func TestPreludeUnless(t *testing.T) {
 	}
 }
 
-func TestPreludeAndShortCircuit(t *testing.T) {
-	g := testGraphWithFormPrelude(t)
+func TestLibraryAndShortCircuit(t *testing.T) {
+	g := testGraphWithFormLibrary(t)
 	// Short-circuit: second arg not evaluated when first is falsy
 	val, err := g.Eval(`(and false (assert false "boom"))`)
 	if err != nil {
@@ -1302,8 +1595,8 @@ func TestPreludeAndShortCircuit(t *testing.T) {
 	}
 }
 
-func TestPreludeOrShortCircuit(t *testing.T) {
-	g := testGraphWithFormPrelude(t)
+func TestLibraryOrShortCircuit(t *testing.T) {
+	g := testGraphWithFormLibrary(t)
 	// Short-circuit: second arg not evaluated when first is truthy
 	val, err := g.Eval(`(or true (assert false "boom"))`)
 	if err != nil {
@@ -1330,15 +1623,12 @@ func TestPreludeOrShortCircuit(t *testing.T) {
 	}
 }
 
-func TestPreludeFormNoDoubleEval(t *testing.T) {
-	g := testGraphWithFormPrelude(t)
+func TestLibraryFormNoDoubleEval(t *testing.T) {
+	g := testGraphWithFormLibrary(t)
 	// Use a side-effecting expression (assert) to verify single evaluation.
-	// counter pattern: define a fn that asserts on second call via a flag.
-	// Simpler: or with a let-bound value — verify it's evaluated once.
 	g.Define("make-counter", `(fn () (let ((n 0)) (fn () (add n 1))))`)
 
-	// or: target expression should only be evaluated once even though
-	// the result is used in both the test and the return position
+	// or: target expression should only be evaluated once
 	val, err := g.Eval(`(or (add 1 2) "fallback")`)
 	if err != nil {
 		t.Fatal(err)
@@ -1373,7 +1663,7 @@ func TestGraphRestParamsFn(t *testing.T) {
 }
 
 func TestGraphRestParamsForm(t *testing.T) {
-	g := testGraphWithFormPrelude(t)
+	g := testGraphWithFormLibrary(t)
 	// cond uses rest params — verify it works through graph
 	val, err := g.Eval(`(cond (eq 1 2) "no" (eq 3 3) "yes")`)
 	if err != nil {

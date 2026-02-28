@@ -3,6 +3,7 @@ core/logos
 core/logos-cli
 mod-time/mod-time
 mod-http-server/mod-http-server
+mcp-logos/mcp-logos
 
 # Data
 data/

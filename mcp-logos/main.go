@@ -34,6 +34,7 @@ func send(req map[string]any) (map[string]any, error) {
 }
 
 // formatResult turns a logos response into an MCP tool result.
+// Includes active_library from core response in the output.
 func formatResult(resp map[string]any) (*mcp.CallToolResult, error) {
 	ok, _ := resp["ok"].(bool)
 	if !ok {
@@ -43,7 +44,14 @@ func formatResult(resp map[string]any) (*mcp.CallToolResult, error) {
 		}
 		return mcp.NewToolResultError(errMsg), nil
 	}
-	out, err := json.MarshalIndent(resp["value"], "", "  ")
+	// Build output map with value and active_library
+	output := map[string]any{
+		"value": resp["value"],
+	}
+	if al, exists := resp["active_library"]; exists {
+		output["active_library"] = al
+	}
+	out, err := json.MarshalIndent(output, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal value: %w", err)
 	}
@@ -115,32 +123,80 @@ func handleDelete(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallTo
 	return formatResult(resp)
 }
 
-func handlePreludeAdd(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleLibraryCreate(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	name, err := request.RequireString("name")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	resp, err := send(map[string]any{"op": "prelude-add", "name": name})
+	resp, err := send(map[string]any{"op": "library-create", "name": name})
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	return formatResult(resp)
 }
 
-func handlePreludeRemove(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleLibraryDelete(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	name, err := request.RequireString("name")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	resp, err := send(map[string]any{"op": "prelude-remove", "name": name})
+	resp, err := send(map[string]any{"op": "library-delete", "name": name})
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	return formatResult(resp)
 }
 
-func handlePreludeList(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	resp, err := send(map[string]any{"op": "prelude-list"})
+func handleLibraryOpen(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, err := request.RequireString("name")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	resp, err := send(map[string]any{"op": "library-open", "name": name})
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return formatResult(resp)
+}
+
+func handleLibraryClose(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	resp, err := send(map[string]any{"op": "library-close"})
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return formatResult(resp)
+}
+
+func handleLibraryCompact(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, err := request.RequireString("name")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	resp, err := send(map[string]any{"op": "library-compact", "name": name})
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return formatResult(resp)
+}
+
+func handleLibraryOrder(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	resp, err := send(map[string]any{"op": "library-order"})
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return formatResult(resp)
+}
+
+func handleLibraryOrderSet(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	names, err := request.RequireStringSlice("names")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	namesAny := make([]any, len(names))
+	for i, n := range names {
+		namesAny[i] = n
+	}
+	resp, err := send(map[string]any{"op": "library-order-set", "names": namesAny})
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -258,37 +314,77 @@ func main() {
 	)
 
 	s.AddTool(
-		mcp.NewTool("logos_prelude_add",
-			mcp.WithDescription("Promote a defined symbol to the prelude. The symbol and all its dependencies must already be builtins or in the prelude."),
+		mcp.NewTool("logos_library_create",
+			mcp.WithDescription("Create a new library. Creates an empty library file and adds it to the manifest."),
 			mcp.WithString("name",
 				mcp.Required(),
-				mcp.Description("Symbol name to add to the prelude"),
+				mcp.Description("Library name to create"),
 			),
 		),
-		handlePreludeAdd,
+		handleLibraryCreate,
 	)
 
 	s.AddTool(
-		mcp.NewTool("logos_prelude_remove",
-			mcp.WithDescription("Remove a symbol from the prelude."),
+		mcp.NewTool("logos_library_delete",
+			mcp.WithDescription("Delete a library. The library must be empty (no symbols) and not currently open."),
 			mcp.WithString("name",
 				mcp.Required(),
-				mcp.Description("Symbol name to remove from the prelude"),
+				mcp.Description("Library name to delete"),
 			),
 		),
-		handlePreludeRemove,
+		handleLibraryDelete,
 	)
 
 	s.AddTool(
-		mcp.NewTool("logos_prelude_list",
-			mcp.WithDescription("List all symbols in the prelude."),
+		mcp.NewTool("logos_library_open",
+			mcp.WithDescription("Open a library for writing. Defines and deletes will be written to this library until it is closed."),
+			mcp.WithString("name",
+				mcp.Required(),
+				mcp.Description("Library name to open"),
+			),
 		),
-		handlePreludeList,
+		handleLibraryOpen,
+	)
+
+	s.AddTool(
+		mcp.NewTool("logos_library_close",
+			mcp.WithDescription("Close the currently open library and return to the session log."),
+		),
+		handleLibraryClose,
+	)
+
+	s.AddTool(
+		mcp.NewTool("logos_library_compact",
+			mcp.WithDescription("Rewrite a library file to contain only current live definitions. The library must not be currently open."),
+			mcp.WithString("name",
+				mcp.Required(),
+				mcp.Description("Library name to compact"),
+			),
+		),
+		handleLibraryCompact,
+	)
+
+	s.AddTool(
+		mcp.NewTool("logos_library_order",
+			mcp.WithDescription("Return the ordered list of libraries from the manifest."),
+		),
+		handleLibraryOrder,
+	)
+
+	s.AddTool(
+		mcp.NewTool("logos_library_order_set",
+			mcp.WithDescription("Set the library load order. All named libraries must have corresponding files."),
+			mcp.WithArray("names",
+				mcp.Required(),
+				mcp.Description("Ordered list of library names"),
+			),
+		),
+		handleLibraryOrderSet,
 	)
 
 	s.AddTool(
 		mcp.NewTool("logos_clear",
-			mcp.WithDescription("Clear the session: truncate log, reset graph to prelude-only state, clear traces."),
+			mcp.WithDescription("Clear the session: truncate log, reset graph, reload libraries, clear traces."),
 		),
 		handleClear,
 	)
