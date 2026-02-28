@@ -141,6 +141,50 @@ func TestBuiltinConcat(t *testing.T) {
 	testEval(t, `(concat "hello" " " "world")`, StringVal("hello world"))
 }
 
+// --- Keywords ---
+
+func TestKeywordSelfEval(t *testing.T) {
+	testEval(t, `:foo`, KeywordVal("foo"))
+	testEval(t, `:hello-world`, KeywordVal("hello-world"))
+}
+
+func TestKeywordInList(t *testing.T) {
+	testEval(t, `(list :a :b :c)`, ListVal([]Value{KeywordVal("a"), KeywordVal("b"), KeywordVal("c")}))
+}
+
+func TestKeywordAsMapKey(t *testing.T) {
+	testEval(t, `(get (dict :name "alice") :name)`, StringVal("alice"))
+	testEval(t, `(get (dict :x 1 :y 2) :y)`, IntVal(2))
+}
+
+func TestKeywordEquality(t *testing.T) {
+	testEval(t, `(eq :foo :foo)`, BoolVal(true))
+	testEval(t, `(eq :foo :bar)`, BoolVal(false))
+	testEval(t, `(eq :foo "foo")`, BoolVal(false))
+}
+
+func TestKeywordTruthy(t *testing.T) {
+	testEval(t, `(if :ok "yes" "no")`, StringVal("yes"))
+}
+
+func TestKeywordQuote(t *testing.T) {
+	testEval(t, `(quote :foo)`, KeywordVal("foo"))
+}
+
+// --- Type builtin ---
+
+func TestBuiltinType(t *testing.T) {
+	testEval(t, `(type 42)`, KeywordVal("int"))
+	testEval(t, `(type 3.14)`, KeywordVal("float"))
+	testEval(t, `(type true)`, KeywordVal("bool"))
+	testEval(t, `(type "hi")`, KeywordVal("string"))
+	testEval(t, `(type :foo)`, KeywordVal("keyword"))
+	testEval(t, `(type nil)`, KeywordVal("nil"))
+	testEval(t, `(type (list 1))`, KeywordVal("list"))
+	testEval(t, `(type (dict "a" 1))`, KeywordVal("map"))
+	testEval(t, `(type (fn (x) x))`, KeywordVal("fn"))
+}
+
 // --- Truthy ---
 
 func TestValueTruthy(t *testing.T) {

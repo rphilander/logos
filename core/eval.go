@@ -52,6 +52,8 @@ func (e *Evaluator) Eval(node *Node) (Value, error) {
 		return StringVal(node.Str), nil
 	case NodeNil:
 		return NilVal(), nil
+	case NodeKeyword:
+		return KeywordVal(node.Str), nil
 	case NodeSymbol:
 		return e.resolveSymbol(node.Str)
 	case NodeRef:
@@ -289,6 +291,8 @@ func nodeToValue(n *Node) Value {
 		return StringVal(n.Str)
 	case NodeSymbol:
 		return StringVal(n.Str)
+	case NodeKeyword:
+		return KeywordVal(n.Str)
 	case NodeRef:
 		return StringVal(n.Str)
 	case NodeNil:
@@ -327,6 +331,7 @@ func DataBuiltins() map[string]Builtin {
 		"nil?":      builtinNilQ,
 		"to-string": builtinToString,
 		"concat":    builtinConcat,
+		"type":      builtinType,
 	}
 }
 
@@ -342,8 +347,8 @@ func builtinDict(args []Value) (Value, error) {
 	}
 	m := make(map[string]Value, len(args)/2)
 	for i := 0; i < len(args); i += 2 {
-		if args[i].Kind != ValString {
-			return Value{}, fmt.Errorf("dict: key must be String, got %s", args[i].KindName())
+		if args[i].Kind != ValString && args[i].Kind != ValKeyword {
+			return Value{}, fmt.Errorf("dict: key must be String or Keyword, got %s", args[i].KindName())
 		}
 		m[args[i].Str] = args[i+1]
 	}
@@ -357,8 +362,8 @@ func builtinGet(args []Value) (Value, error) {
 	if args[0].Kind != ValMap {
 		return Value{}, fmt.Errorf("get: expected Map, got %s", args[0].KindName())
 	}
-	if args[1].Kind != ValString {
-		return Value{}, fmt.Errorf("get: expected String key, got %s", args[1].KindName())
+	if args[1].Kind != ValString && args[1].Kind != ValKeyword {
+		return Value{}, fmt.Errorf("get: expected String or Keyword key, got %s", args[1].KindName())
 	}
 	m := *args[0].Map
 	val, ok := m[args[1].Str]
@@ -475,4 +480,32 @@ func builtinConcat(args []Value) (Value, error) {
 		sb.WriteString(a.Str)
 	}
 	return StringVal(sb.String()), nil
+}
+
+func builtinType(args []Value) (Value, error) {
+	if len(args) != 1 {
+		return Value{}, fmt.Errorf("type: expected 1 arg, got %d", len(args))
+	}
+	switch args[0].Kind {
+	case ValInt:
+		return KeywordVal("int"), nil
+	case ValFloat:
+		return KeywordVal("float"), nil
+	case ValBool:
+		return KeywordVal("bool"), nil
+	case ValString:
+		return KeywordVal("string"), nil
+	case ValKeyword:
+		return KeywordVal("keyword"), nil
+	case ValNil:
+		return KeywordVal("nil"), nil
+	case ValList:
+		return KeywordVal("list"), nil
+	case ValMap:
+		return KeywordVal("map"), nil
+	case ValFn:
+		return KeywordVal("fn"), nil
+	default:
+		return KeywordVal("unknown"), nil
+	}
 }

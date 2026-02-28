@@ -135,6 +135,29 @@ func TestParseComment(t *testing.T) {
 	}
 }
 
+func TestParseKeyword(t *testing.T) {
+	n, err := Parse(":foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.Kind != NodeKeyword || n.Str != "foo" {
+		t.Fatalf("expected Keyword 'foo', got %v", n)
+	}
+}
+
+func TestParseKeywordInList(t *testing.T) {
+	n, err := Parse("(list :a :b)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.Kind != NodeList || len(n.Children) != 3 {
+		t.Fatalf("expected list with 3 children, got %v", n)
+	}
+	if n.Children[1].Kind != NodeKeyword || n.Children[1].Str != "a" {
+		t.Fatalf("expected keyword :a, got %v", n.Children[1])
+	}
+}
+
 func TestParseErrors(t *testing.T) {
 	cases := []string{
 		"",          // empty

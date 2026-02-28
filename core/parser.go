@@ -18,6 +18,7 @@ const (
 	NodeList
 	NodeRef // resolved reference: Str = original symbol name, Ref = node ID
 	NodeNil
+	NodeKeyword
 )
 
 type Node struct {
@@ -49,6 +50,8 @@ func (n *Node) String() string {
 		return n.Str
 	case NodeNil:
 		return "nil"
+	case NodeKeyword:
+		return ":" + n.Str
 	case NodeList:
 		parts := make([]string, len(n.Children))
 		for i, c := range n.Children {
@@ -171,6 +174,10 @@ func (p *parser) parseAtom() (*Node, error) {
 	}
 	if token == "nil" {
 		return &Node{Kind: NodeNil}, nil
+	}
+
+	if len(token) > 1 && token[0] == ':' {
+		return &Node{Kind: NodeKeyword, Str: token[1:]}, nil
 	}
 
 	if i, err := strconv.ParseInt(token, 10, 64); err == nil {

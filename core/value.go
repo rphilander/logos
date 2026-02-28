@@ -18,6 +18,7 @@ const (
 	ValList
 	ValMap
 	ValNil
+	ValKeyword
 )
 
 type FnValue struct {
@@ -51,7 +52,8 @@ func ListVal(elems []Value) Value {
 func MapVal(m map[string]Value) Value {
 	return Value{Kind: ValMap, Map: &m}
 }
-func NilVal() Value { return Value{Kind: ValNil} }
+func NilVal() Value        { return Value{Kind: ValNil} }
+func KeywordVal(s string) Value { return Value{Kind: ValKeyword, Str: s} }
 
 // Truthy implements nil-as-flow: nil and false are falsy, everything else is truthy.
 func (v Value) Truthy() bool {
@@ -78,15 +80,18 @@ func (v Value) String() string {
 		return "false"
 	case ValString:
 		return v.Str
+	case ValKeyword:
+		return ":" + v.Str
 	case ValFn:
 		return fmt.Sprintf("<fn(%s)>", strings.Join(v.Fn.Params, ", "))
 	case ValList:
 		elems := *v.List
 		parts := make([]string, len(elems))
 		for i, e := range elems {
-			if e.Kind == ValString {
+			switch e.Kind {
+			case ValString:
 				parts[i] = fmt.Sprintf("%q", e.Str)
-			} else {
+			default:
 				parts[i] = e.String()
 			}
 		}
@@ -134,6 +139,8 @@ func (v Value) KindName() string {
 		return "Map"
 	case ValNil:
 		return "Nil"
+	case ValKeyword:
+		return "Keyword"
 	default:
 		return "Unknown"
 	}
@@ -178,6 +185,8 @@ func ValuesEqual(a, b Value) bool {
 		return true
 	case ValNil:
 		return true
+	case ValKeyword:
+		return a.Str == b.Str
 	}
 	return false
 }
@@ -193,6 +202,8 @@ func ValueToGo(v Value) (any, error) {
 		return v.Bool, nil
 	case ValString:
 		return v.Str, nil
+	case ValKeyword:
+		return ":" + v.Str, nil
 	case ValNil:
 		return nil, nil
 	case ValList:
@@ -237,6 +248,9 @@ func GoToValue(v any) Value {
 		}
 		return FloatVal(val)
 	case string:
+		if len(val) > 1 && val[0] == ':' {
+			return KeywordVal(val[1:])
+		}
 		return StringVal(val)
 	case []any:
 		elems := make([]Value, len(val))
