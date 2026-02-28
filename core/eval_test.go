@@ -58,6 +58,51 @@ func TestEvalLetSequential(t *testing.T) {
 	testEval(t, `(let ((x 1) (y x)) y)`, IntVal(1))
 }
 
+// --- Cond ---
+
+func TestEvalCond(t *testing.T) {
+	testEval(t, `(cond false 1 true 2)`, IntVal(2))
+	testEval(t, `(cond true 1 true 2)`, IntVal(1))
+}
+
+func TestEvalCondTruthy(t *testing.T) {
+	testEval(t, `(cond nil 1 0 2)`, IntVal(2))
+}
+
+func TestEvalCondExprs(t *testing.T) {
+	testEval(t, `(cond (eq 1 2) "no" (eq 1 1) "yes")`, StringVal("yes"))
+}
+
+func TestEvalCondNoMatch(t *testing.T) {
+	testEval(t, `(cond false 1 false 2)`, NilVal())
+}
+
+func TestEvalCondOddArgs(t *testing.T) {
+	testEvalError(t, `(cond true)`)
+}
+
+// --- Case ---
+
+func TestEvalCaseKeyword(t *testing.T) {
+	testEval(t, `(case :b :a 1 :b 2 :c 3)`, IntVal(2))
+}
+
+func TestEvalCaseDefault(t *testing.T) {
+	testEval(t, `(case :z :a 1 :b 2 "default")`, StringVal("default"))
+}
+
+func TestEvalCaseNoMatch(t *testing.T) {
+	testEval(t, `(case :z :a 1 :b 2)`, NilVal())
+}
+
+func TestEvalCaseInt(t *testing.T) {
+	testEval(t, `(case 2 1 "one" 2 "two")`, StringVal("two"))
+}
+
+func TestEvalCaseWithType(t *testing.T) {
+	testEval(t, `(case (type 42) :int "integer" :string "text" "other")`, StringVal("integer"))
+}
+
 // --- Do ---
 
 func TestEvalDo(t *testing.T) {

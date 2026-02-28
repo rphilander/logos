@@ -31,6 +31,7 @@ type Graph struct {
 // coreFormKeywords are symbols that should not be resolved during define.
 var coreFormKeywords = map[string]bool{
 	"if": true, "let": true, "do": true, "fn": true, "quote": true,
+	"cond": true, "case": true,
 }
 
 func NewGraph(dir string, builtins map[string]Builtin) (*Graph, error) {

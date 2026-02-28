@@ -115,6 +115,10 @@ func (e *Evaluator) evalList(node *Node) (Value, error) {
 			return e.evalFn(node)
 		case "quote":
 			return e.evalQuote(node)
+		case "cond":
+			return e.evalCond(node)
+		case "case":
+			return e.evalCase(node)
 		}
 	}
 
@@ -276,6 +280,53 @@ func (e *Evaluator) evalQuote(node *Node) (Value, error) {
 		return Value{}, fmt.Errorf("quote: expected 1 arg")
 	}
 	return nodeToValue(node.Children[1]), nil
+}
+
+// evalCond: (cond test1 expr1 test2 expr2 ... ) — multi-way branch.
+// Evaluates tests top to bottom, returns the expr for the first truthy test.
+func (e *Evaluator) evalCond(node *Node) (Value, error) {
+	args := node.Children[1:]
+	if len(args) == 0 || len(args)%2 != 0 {
+		return Value{}, fmt.Errorf("cond: expected even number of args (test/expr pairs), got %d", len(args))
+	}
+	for i := 0; i < len(args); i += 2 {
+		test, err := e.Eval(args[i])
+		if err != nil {
+			return Value{}, err
+		}
+		if test.Truthy() {
+			return e.Eval(args[i+1])
+		}
+	}
+	return NilVal(), nil
+}
+
+// evalCase: (case target match1 expr1 match2 expr2 ... [default]) — value dispatch.
+// Evaluates target once, checks each match value with ValuesEqual.
+// If odd trailing arg, it's the default. If no match and no default, returns nil.
+func (e *Evaluator) evalCase(node *Node) (Value, error) {
+	if len(node.Children) < 2 {
+		return Value{}, fmt.Errorf("case: expected target and at least one clause")
+	}
+	target, err := e.Eval(node.Children[1])
+	if err != nil {
+		return Value{}, err
+	}
+	args := node.Children[2:]
+	pairs := len(args) / 2
+	for i := 0; i < pairs; i++ {
+		matchVal, err := e.Eval(args[i*2])
+		if err != nil {
+			return Value{}, err
+		}
+		if ValuesEqual(target, matchVal) {
+			return e.Eval(args[i*2+1])
+		}
+	}
+	if len(args)%2 != 0 {
+		return e.Eval(args[len(args)-1])
+	}
+	return NilVal(), nil
 }
 
 // nodeToValue converts an AST node to a Value for quote.
