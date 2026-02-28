@@ -145,51 +145,6 @@ func TestNoFuelDefault(t *testing.T) {
 	testEval(t, `(add 1 2)`, IntVal(3))
 }
 
-// --- Cond ---
-
-func TestEvalCond(t *testing.T) {
-	testEval(t, `(cond false 1 true 2)`, IntVal(2))
-	testEval(t, `(cond true 1 true 2)`, IntVal(1))
-}
-
-func TestEvalCondTruthy(t *testing.T) {
-	testEval(t, `(cond nil 1 0 2)`, IntVal(2))
-}
-
-func TestEvalCondExprs(t *testing.T) {
-	testEval(t, `(cond (eq 1 2) "no" (eq 1 1) "yes")`, StringVal("yes"))
-}
-
-func TestEvalCondNoMatch(t *testing.T) {
-	testEval(t, `(cond false 1 false 2)`, NilVal())
-}
-
-func TestEvalCondOddArgs(t *testing.T) {
-	testEvalError(t, `(cond true)`)
-}
-
-// --- Case ---
-
-func TestEvalCaseKeyword(t *testing.T) {
-	testEval(t, `(case :b :a 1 :b 2 :c 3)`, IntVal(2))
-}
-
-func TestEvalCaseDefault(t *testing.T) {
-	testEval(t, `(case :z :a 1 :b 2 "default")`, StringVal("default"))
-}
-
-func TestEvalCaseNoMatch(t *testing.T) {
-	testEval(t, `(case :z :a 1 :b 2)`, NilVal())
-}
-
-func TestEvalCaseInt(t *testing.T) {
-	testEval(t, `(case 2 1 "one" 2 "two")`, StringVal("two"))
-}
-
-func TestEvalCaseWithType(t *testing.T) {
-	testEval(t, `(case (type 42) :int "integer" :string "text" "other")`, StringVal("integer"))
-}
-
 // --- Do ---
 
 func TestEvalDo(t *testing.T) {
@@ -205,6 +160,66 @@ func TestEvalFn(t *testing.T) {
 
 func TestEvalFnWrongArity(t *testing.T) {
 	testEvalError(t, `((fn (x) x) 1 2)`)
+}
+
+// --- Rest params ---
+
+func TestRestParamsFn(t *testing.T) {
+	testEval(t, `((fn (x & rest) rest) 1 2 3)`, ListVal([]Value{IntVal(2), IntVal(3)}))
+	testEval(t, `((fn (x & rest) (list x rest)) 1)`, ListVal([]Value{IntVal(1), ListVal([]Value{})}))
+	testEval(t, `((fn (& rest) rest) 1 2 3)`, ListVal([]Value{IntVal(1), IntVal(2), IntVal(3)}))
+	testEval(t, `((fn (& rest) rest))`, ListVal([]Value{}))
+}
+
+func TestRestParamsFnArity(t *testing.T) {
+	// Too few args for positional params
+	testEvalError(t, `((fn (x y & rest) rest) 1)`)
+}
+
+func TestRestParamsForm(t *testing.T) {
+	ev := &Evaluator{Builtins: DataBuiltins()}
+	ev.Resolve = func(name string) (Value, bool) {
+		if name == "my-list" {
+			val, _ := ev.EvalString(`(form (& items) (cons (quote list) items))`)
+			return val, true
+		}
+		return Value{}, false
+	}
+	val, err := ev.EvalString(`(my-list 1 2 3)`)
+	if err != nil {
+		t.Fatalf("my-list: %v", err)
+	}
+	expected := ListVal([]Value{IntVal(1), IntVal(2), IntVal(3)})
+	if !ValuesEqual(val, expected) {
+		t.Fatalf("expected %s, got %s", expected.String(), val.String())
+	}
+}
+
+func TestRestParamsString(t *testing.T) {
+	ev := &Evaluator{Builtins: DataBuiltins()}
+	val, err := ev.EvalString(`(fn (x & rest) x)`)
+	if err != nil {
+		t.Fatalf("fn creation: %v", err)
+	}
+	expected := "<fn(x, & rest)>"
+	if val.String() != expected {
+		t.Fatalf("expected %q, got %q", expected, val.String())
+	}
+	// Form with rest
+	val, err = ev.EvalString(`(form (& args) args)`)
+	if err != nil {
+		t.Fatalf("form creation: %v", err)
+	}
+	expected = "<form(& args)>"
+	if val.String() != expected {
+		t.Fatalf("expected %q, got %q", expected, val.String())
+	}
+}
+
+func TestRestParamsParseErrors(t *testing.T) {
+	// & not followed by exactly one name
+	testEvalError(t, `(fn (x &) x)`)
+	testEvalError(t, `(fn (x & a b) x)`)
 }
 
 // --- Quote ---
@@ -522,6 +537,175 @@ func TestAssertNonStringMessage(t *testing.T) {
 	_, err := ev.EvalString(`(assert false 42)`)
 	if err == nil {
 		t.Fatal("expected error for non-string message")
+	}
+}
+
+// --- Form (macros) ---
+
+func TestFormCreatesFormType(t *testing.T) {
+	testEval(t, `(type (form (x) x))`, KeywordVal("form"))
+}
+
+func TestFormWhenMacro(t *testing.T) {
+	// when: (when test body) → (if test body nil)
+	ev := &Evaluator{Builtins: DataBuiltins()}
+	// Define when as a form
+	ev.Resolve = func(name string) (Value, bool) {
+		if name == "when" {
+			val, _ := ev.EvalString(`(form (test body) (list (quote if) test body nil))`)
+			return val, true
+		}
+		return Value{}, false
+	}
+	val, err := ev.EvalString(`(when true 42)`)
+	if err != nil {
+		t.Fatalf("when true: %v", err)
+	}
+	if !ValuesEqual(val, IntVal(42)) {
+		t.Fatalf("when true: expected 42, got %s", val.String())
+	}
+	val, err = ev.EvalString(`(when false 42)`)
+	if err != nil {
+		t.Fatalf("when false: %v", err)
+	}
+	if !ValuesEqual(val, NilVal()) {
+		t.Fatalf("when false: expected nil, got %s", val.String())
+	}
+}
+
+func TestFormArgsNotEvaluated(t *testing.T) {
+	// The form should receive AST data, not evaluated values
+	// (form (x) x) applied to a symbol should return the symbol as a value
+	ev := &Evaluator{Builtins: DataBuiltins()}
+	ev.Resolve = func(name string) (Value, bool) {
+		if name == "my-quote" {
+			val, _ := ev.EvalString(`(form (x) (list (quote quote) x))`)
+			return val, true
+		}
+		return Value{}, false
+	}
+	val, err := ev.EvalString(`(my-quote hello)`)
+	if err != nil {
+		t.Fatalf("my-quote: %v", err)
+	}
+	if !ValuesEqual(val, SymbolVal("hello")) {
+		t.Fatalf("my-quote: expected symbol hello, got %s", val.String())
+	}
+}
+
+func TestFormArityError(t *testing.T) {
+	ev := &Evaluator{Builtins: DataBuiltins()}
+	ev.Resolve = func(name string) (Value, bool) {
+		if name == "my-form" {
+			val, _ := ev.EvalString(`(form (a b) a)`)
+			return val, true
+		}
+		return Value{}, false
+	}
+	_, err := ev.EvalString(`(my-form 1)`)
+	if err == nil {
+		t.Fatal("expected arity error")
+	}
+}
+
+func TestFormSyntaxErrors(t *testing.T) {
+	testEvalError(t, `(form)`)
+	testEvalError(t, `(form (x))`)           // missing body
+	testEvalError(t, `(form "bad" x)`)        // params not a list
+	testEvalError(t, `(form (1) x)`)           // param not a symbol
+}
+
+func TestFormApplyRejects(t *testing.T) {
+	testEvalError(t, `(apply (form (x) x) (list 1))`)
+}
+
+func TestFormSortByRejects(t *testing.T) {
+	testEvalError(t, `(sort-by (form (x) x) (list 1 2))`)
+}
+
+func TestFormFuelCatchesInfiniteExpansion(t *testing.T) {
+	// A form that expands to calling itself — infinite macro expansion
+	ev := &Evaluator{Builtins: DataBuiltins(), Fuel: 50, FuelSet: true}
+	ev.Resolve = func(name string) (Value, bool) {
+		if name == "loop-form" {
+			val, _ := ev.EvalString(`(form () (list (quote loop-form)))`)
+			return val, true
+		}
+		return Value{}, false
+	}
+	_, err := ev.EvalString(`(loop-form)`)
+	if err == nil {
+		t.Fatal("expected fuel exhaustion error")
+	}
+}
+
+func TestFormInLetrecBackpatch(t *testing.T) {
+	// Forms should be back-patched in letrec just like fns
+	testEval(t, `(letrec ((my-when (form (test body) (list (quote if) test body nil))))
+		(my-when true 42))`, IntVal(42))
+}
+
+func TestFormString(t *testing.T) {
+	ev := &Evaluator{Builtins: DataBuiltins()}
+	val, err := ev.EvalString(`(form (a b) a)`)
+	if err != nil {
+		t.Fatalf("form creation: %v", err)
+	}
+	expected := "<form(a, b)>"
+	if val.String() != expected {
+		t.Fatalf("expected %q, got %q", expected, val.String())
+	}
+}
+
+func TestValueToNodeRoundtrip(t *testing.T) {
+	// Verify valueToNode is inverse of nodeToValue for all supported types
+	cases := []string{
+		"42", "3.14", "true", `"hello"`, "nil", ":foo",
+		"(list 1 2 3)", "(list (list 1) (list 2))",
+	}
+	ev := &Evaluator{Builtins: DataBuiltins()}
+	for _, input := range cases {
+		node, err := Parse(input)
+		if err != nil {
+			t.Fatalf("parse %q: %v", input, err)
+		}
+		val := nodeToValue(node)
+		roundtripped, err := valueToNode(val)
+		if err != nil {
+			t.Fatalf("valueToNode %q: %v", input, err)
+		}
+		result, err := ev.Eval(roundtripped)
+		if err != nil {
+			t.Fatalf("eval roundtripped %q: %v", input, err)
+		}
+		original, err := ev.Eval(node)
+		if err != nil {
+			t.Fatalf("eval original %q: %v", input, err)
+		}
+		if !ValuesEqual(result, original) {
+			t.Fatalf("roundtrip %q: expected %s, got %s", input, original.String(), result.String())
+		}
+	}
+}
+
+func TestValueToNodeRejectsUnsupported(t *testing.T) {
+	// Map should be rejected
+	m := MapVal(map[string]Value{"a": IntVal(1)})
+	_, err := valueToNode(m)
+	if err == nil {
+		t.Fatal("expected error for Map")
+	}
+	// Fn should be rejected
+	fn := FnVal(&FnValue{Params: []string{"x"}, Body: &Node{Kind: NodeInt, Int: 1}})
+	_, err = valueToNode(fn)
+	if err == nil {
+		t.Fatal("expected error for Fn")
+	}
+	// Form should be rejected
+	form := FormVal(&FnValue{Params: []string{"x"}, Body: &Node{Kind: NodeInt, Int: 1}})
+	_, err = valueToNode(form)
+	if err == nil {
+		t.Fatal("expected error for Form")
 	}
 }
 

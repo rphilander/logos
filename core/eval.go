@@ -102,7 +102,7 @@ func (e *Evaluator) evalRef(nodeID string) (Value, error) {
 	if err != nil {
 		return Value{}, err
 	}
-	if val.Kind == ValFn {
+	if val.Kind == ValFn || val.Kind == ValForm {
 		val.Fn.NodeID = nodeID
 	}
 	return val, nil
@@ -128,12 +128,10 @@ func (e *Evaluator) evalList(node *Node) (Value, error) {
 			return e.evalDo(node)
 		case "fn":
 			return e.evalFn(node)
+		case "form":
+			return e.evalForm(node)
 		case "quote":
 			return e.evalQuote(node)
-		case "cond":
-			return e.evalCond(node)
-		case "case":
-			return e.evalCase(node)
 		case "apply":
 			return e.evalApply(node)
 		case "sort-by":
@@ -158,6 +156,9 @@ func (e *Evaluator) evalList(node *Node) (Value, error) {
 	}
 	if headVal.Kind == ValFn {
 		return e.callFn(headVal.Fn, node.Children[1:])
+	}
+	if headVal.Kind == ValForm {
+		return e.callForm(headVal.Fn, node.Children[1:])
 	}
 
 	if head.Kind == NodeSymbol {
@@ -186,10 +187,16 @@ type tailContinuation struct {
 }
 
 func (e *Evaluator) callFn(fn *FnValue, argNodes []*Node) (Value, error) {
-	if len(argNodes) != len(fn.Params) {
-		return Value{}, fmt.Errorf("fn: expected %d args, got %d", len(fn.Params), len(argNodes))
+	if fn.RestParam != "" {
+		if len(argNodes) < len(fn.Params) {
+			return Value{}, fmt.Errorf("fn: expected at least %d args, got %d", len(fn.Params), len(argNodes))
+		}
+	} else {
+		if len(argNodes) != len(fn.Params) {
+			return Value{}, fmt.Errorf("fn: expected %d args, got %d", len(fn.Params), len(argNodes))
+		}
 	}
-	args := make([]Value, len(fn.Params))
+	args := make([]Value, len(argNodes))
 	for i, argNode := range argNodes {
 		val, err := e.Eval(argNode)
 		if err != nil {
@@ -212,8 +219,14 @@ func (e *Evaluator) callFnTrampolined(fn *FnValue, args []Value) (Value, error) 
 	defer func() { e.locals = e.locals[:baseScope] }()
 
 	for {
-		if len(args) != len(fn.Params) {
-			return Value{}, fmt.Errorf("fn: expected %d args, got %d", len(fn.Params), len(args))
+		if fn.RestParam != "" {
+			if len(args) < len(fn.Params) {
+				return Value{}, fmt.Errorf("fn: expected at least %d args, got %d", len(fn.Params), len(args))
+			}
+		} else {
+			if len(args) != len(fn.Params) {
+				return Value{}, fmt.Errorf("fn: expected %d args, got %d", len(fn.Params), len(args))
+			}
 		}
 
 		// Reset scope to base (cleans up from previous iteration)
@@ -225,9 +238,12 @@ func (e *Evaluator) callFnTrampolined(fn *FnValue, args []Value) (Value, error) 
 		}
 
 		// Push bindings scope
-		bindings := make(map[string]Value, len(fn.Params))
+		bindings := make(map[string]Value, len(fn.Params)+1)
 		for i, param := range fn.Params {
 			bindings[param] = args[i]
+		}
+		if fn.RestParam != "" {
+			bindings[fn.RestParam] = ListVal(args[len(fn.Params):])
 		}
 		e.pushScope(bindings)
 
@@ -346,9 +362,9 @@ func (e *Evaluator) evalLetrecBindings(node *Node) (map[string]Value, error) {
 		scope[names[i]] = val
 	}
 
-	// Back-patch: update closures of FnValues to see all final bindings.
+	// Back-patch: update closures of FnValues and FormValues to see all final bindings.
 	for _, val := range scope {
-		if val.Kind == ValFn && val.Fn != nil {
+		if (val.Kind == ValFn || val.Kind == ValForm) && val.Fn != nil {
 			if val.Fn.Closure == nil {
 				val.Fn.Closure = make(map[string]Value, len(names))
 			}
@@ -376,21 +392,45 @@ func (e *Evaluator) evalDo(node *Node) (Value, error) {
 	return result, nil
 }
 
+// parseFnParams parses a param list, supporting & rest syntax.
+// Returns (positional params, rest param name, error).
+func parseFnParams(kind string, paramsNode *Node) ([]string, string, error) {
+	if paramsNode.Kind != NodeList {
+		return nil, "", fmt.Errorf("%s: params must be a list", kind)
+	}
+	var params []string
+	var restParam string
+	children := paramsNode.Children
+	for i := 0; i < len(children); i++ {
+		p := children[i]
+		if p.Kind == NodeSymbol && p.Str == "&" {
+			// & must be followed by exactly one symbol
+			if i+1 != len(children)-1 {
+				return nil, "", fmt.Errorf("%s: & must be followed by exactly one rest param at end", kind)
+			}
+			rest := children[i+1]
+			if rest.Kind != NodeSymbol {
+				return nil, "", fmt.Errorf("%s: rest param name must be a symbol", kind)
+			}
+			restParam = rest.Str
+			break
+		}
+		if p.Kind != NodeSymbol {
+			return nil, "", fmt.Errorf("%s: param names must be symbols", kind)
+		}
+		params = append(params, p.Str)
+	}
+	return params, restParam, nil
+}
+
 // evalFn: (fn (params...) body) — create closure.
 func (e *Evaluator) evalFn(node *Node) (Value, error) {
 	if len(node.Children) != 3 {
 		return Value{}, fmt.Errorf("fn: expected (fn (params...) body)")
 	}
-	paramsNode := node.Children[1]
-	if paramsNode.Kind != NodeList {
-		return Value{}, fmt.Errorf("fn: params must be a list")
-	}
-	params := make([]string, len(paramsNode.Children))
-	for i, p := range paramsNode.Children {
-		if p.Kind != NodeSymbol {
-			return Value{}, fmt.Errorf("fn: param names must be symbols")
-		}
-		params[i] = p.Str
+	params, restParam, err := parseFnParams("fn", node.Children[1])
+	if err != nil {
+		return Value{}, err
 	}
 	// Capture enclosing local scope for closure.
 	var closure map[string]Value
@@ -403,9 +443,36 @@ func (e *Evaluator) evalFn(node *Node) (Value, error) {
 		}
 	}
 	return FnVal(&FnValue{
-		Params:  params,
-		Body:    node.Children[2],
-		Closure: closure,
+		Params:    params,
+		RestParam: restParam,
+		Body:      node.Children[2],
+		Closure:   closure,
+	}), nil
+}
+
+// evalForm: (form (params...) body) — create a form (macro) value.
+func (e *Evaluator) evalForm(node *Node) (Value, error) {
+	if len(node.Children) != 3 {
+		return Value{}, fmt.Errorf("form: expected (form (params...) body)")
+	}
+	params, restParam, err := parseFnParams("form", node.Children[1])
+	if err != nil {
+		return Value{}, err
+	}
+	var closure map[string]Value
+	if len(e.locals) > 0 {
+		closure = make(map[string]Value)
+		for _, scope := range e.locals {
+			for k, v := range scope {
+				closure[k] = v
+			}
+		}
+	}
+	return FormVal(&FnValue{
+		Params:    params,
+		RestParam: restParam,
+		Body:      node.Children[2],
+		Closure:   closure,
 	}), nil
 }
 
@@ -416,53 +483,6 @@ func (e *Evaluator) evalQuote(node *Node) (Value, error) {
 		return Value{}, fmt.Errorf("quote: expected 1 arg")
 	}
 	return nodeToValue(node.Children[1]), nil
-}
-
-// evalCond: (cond test1 expr1 test2 expr2 ... ) — multi-way branch.
-// Evaluates tests top to bottom, returns the expr for the first truthy test.
-func (e *Evaluator) evalCond(node *Node) (Value, error) {
-	args := node.Children[1:]
-	if len(args) == 0 || len(args)%2 != 0 {
-		return Value{}, fmt.Errorf("cond: expected even number of args (test/expr pairs), got %d", len(args))
-	}
-	for i := 0; i < len(args); i += 2 {
-		test, err := e.Eval(args[i])
-		if err != nil {
-			return Value{}, err
-		}
-		if test.Truthy() {
-			return e.Eval(args[i+1])
-		}
-	}
-	return NilVal(), nil
-}
-
-// evalCase: (case target match1 expr1 match2 expr2 ... [default]) — value dispatch.
-// Evaluates target once, checks each match value with ValuesEqual.
-// If odd trailing arg, it's the default. If no match and no default, returns nil.
-func (e *Evaluator) evalCase(node *Node) (Value, error) {
-	if len(node.Children) < 2 {
-		return Value{}, fmt.Errorf("case: expected target and at least one clause")
-	}
-	target, err := e.Eval(node.Children[1])
-	if err != nil {
-		return Value{}, err
-	}
-	args := node.Children[2:]
-	pairs := len(args) / 2
-	for i := 0; i < pairs; i++ {
-		matchVal, err := e.Eval(args[i*2])
-		if err != nil {
-			return Value{}, err
-		}
-		if ValuesEqual(target, matchVal) {
-			return e.Eval(args[i*2+1])
-		}
-	}
-	if len(args)%2 != 0 {
-		return e.Eval(args[len(args)-1])
-	}
-	return NilVal(), nil
 }
 
 // --- Tail-call optimization (TCO) ---
@@ -503,12 +523,8 @@ func (e *Evaluator) evalListTail(node *Node) (Value, *tailContinuation, error) {
 			return e.evalLetrecTail(node)
 		case "do":
 			return e.evalDoTail(node)
-		case "cond":
-			return e.evalCondTail(node)
-		case "case":
-			return e.evalCaseTail(node)
 		// Non-tail core forms: delegate to regular eval
-		case "fn", "quote", "apply", "sort-by":
+		case "fn", "form", "quote", "apply", "sort-by":
 			val, err := e.evalList(node)
 			return val, nil, err
 		}
@@ -541,6 +557,9 @@ func (e *Evaluator) evalListTail(node *Node) (Value, *tailContinuation, error) {
 			args[i] = val
 		}
 		return Value{}, &tailContinuation{Fn: headVal.Fn, Args: args}, nil
+	}
+	if headVal.Kind == ValForm {
+		return e.callFormTail(headVal.Fn, node.Children[1:])
 	}
 
 	if head.Kind == NodeSymbol {
@@ -616,48 +635,6 @@ func (e *Evaluator) evalDoTail(node *Node) (Value, *tailContinuation, error) {
 	return e.evalTail(node.Children[len(node.Children)-1])
 }
 
-func (e *Evaluator) evalCondTail(node *Node) (Value, *tailContinuation, error) {
-	args := node.Children[1:]
-	if len(args) == 0 || len(args)%2 != 0 {
-		return Value{}, nil, fmt.Errorf("cond: expected even number of args (test/expr pairs), got %d", len(args))
-	}
-	for i := 0; i < len(args); i += 2 {
-		test, err := e.Eval(args[i])
-		if err != nil {
-			return Value{}, nil, err
-		}
-		if test.Truthy() {
-			return e.evalTail(args[i+1])
-		}
-	}
-	return NilVal(), nil, nil
-}
-
-func (e *Evaluator) evalCaseTail(node *Node) (Value, *tailContinuation, error) {
-	if len(node.Children) < 2 {
-		return Value{}, nil, fmt.Errorf("case: expected target and at least one clause")
-	}
-	target, err := e.Eval(node.Children[1])
-	if err != nil {
-		return Value{}, nil, err
-	}
-	args := node.Children[2:]
-	pairs := len(args) / 2
-	for i := 0; i < pairs; i++ {
-		matchVal, err := e.Eval(args[i*2])
-		if err != nil {
-			return Value{}, nil, err
-		}
-		if ValuesEqual(target, matchVal) {
-			return e.evalTail(args[i*2+1])
-		}
-	}
-	if len(args)%2 != 0 {
-		return e.evalTail(args[len(args)-1])
-	}
-	return NilVal(), nil, nil
-}
-
 // evalApply: (apply fn list) — call fn with list elements as args.
 func (e *Evaluator) evalApply(node *Node) (Value, error) {
 	if len(node.Children) != 3 {
@@ -666,6 +643,9 @@ func (e *Evaluator) evalApply(node *Node) (Value, error) {
 	fnVal, err := e.Eval(node.Children[1])
 	if err != nil {
 		return Value{}, err
+	}
+	if fnVal.Kind == ValForm {
+		return Value{}, fmt.Errorf("apply: cannot apply a Form (forms receive unevaluated AST)")
 	}
 	if fnVal.Kind != ValFn {
 		return Value{}, fmt.Errorf("apply: first arg must be Fn, got %s", fnVal.KindName())
@@ -689,6 +669,9 @@ func (e *Evaluator) evalSortBy(node *Node) (Value, error) {
 	fnVal, err := e.Eval(node.Children[1])
 	if err != nil {
 		return Value{}, err
+	}
+	if fnVal.Kind == ValForm {
+		return Value{}, fmt.Errorf("sort-by: cannot use a Form (forms receive unevaluated AST)")
 	}
 	if fnVal.Kind != ValFn {
 		return Value{}, fmt.Errorf("sort-by: first arg must be Fn, got %s", fnVal.KindName())
@@ -780,6 +763,98 @@ func nodeToValue(n *Node) Value {
 	default:
 		return NilVal()
 	}
+}
+
+// valueToNode converts a logos Value back to an AST node (inverse of nodeToValue).
+// Used by form expansion: the form body returns a Value, which becomes AST to evaluate.
+func valueToNode(v Value) (*Node, error) {
+	switch v.Kind {
+	case ValInt:
+		return &Node{Kind: NodeInt, Int: v.Int}, nil
+	case ValFloat:
+		return &Node{Kind: NodeFloat, Float: v.Float}, nil
+	case ValBool:
+		return &Node{Kind: NodeBool, Bool: v.Bool}, nil
+	case ValString:
+		return &Node{Kind: NodeString, Str: v.Str}, nil
+	case ValNil:
+		return &Node{Kind: NodeNil}, nil
+	case ValKeyword:
+		return &Node{Kind: NodeKeyword, Str: v.Str}, nil
+	case ValSymbol:
+		return &Node{Kind: NodeSymbol, Str: v.Str}, nil
+	case ValNodeRef:
+		return &Node{Kind: NodeRef, Ref: v.Str}, nil
+	case ValList:
+		elems := *v.List
+		children := make([]*Node, len(elems))
+		for i, e := range elems {
+			child, err := valueToNode(e)
+			if err != nil {
+				return nil, err
+			}
+			children[i] = child
+		}
+		return &Node{Kind: NodeList, Children: children}, nil
+	default:
+		return nil, fmt.Errorf("valueToNode: cannot convert %s to AST", v.KindName())
+	}
+}
+
+// callForm calls a form value with unevaluated AST args.
+func (e *Evaluator) callForm(form *FnValue, argNodes []*Node) (Value, error) {
+	if form.RestParam != "" {
+		if len(argNodes) < len(form.Params) {
+			return Value{}, fmt.Errorf("form: expected at least %d args, got %d", len(form.Params), len(argNodes))
+		}
+	} else {
+		if len(argNodes) != len(form.Params) {
+			return Value{}, fmt.Errorf("form: expected %d args, got %d", len(form.Params), len(argNodes))
+		}
+	}
+	// Convert each arg AST to a Value (not evaluated)
+	args := make([]Value, len(argNodes))
+	for i, argNode := range argNodes {
+		args[i] = nodeToValue(argNode)
+	}
+	// Evaluate form body to produce expansion
+	expansion, err := e.CallFnWithValues(form, args)
+	if err != nil {
+		return Value{}, err
+	}
+	// Convert expansion back to AST
+	expansionNode, err := valueToNode(expansion)
+	if err != nil {
+		return Value{}, fmt.Errorf("form expansion: %w", err)
+	}
+	// Evaluate the expansion in the caller's scope
+	return e.Eval(expansionNode)
+}
+
+// callFormTail calls a form value in tail position.
+func (e *Evaluator) callFormTail(form *FnValue, argNodes []*Node) (Value, *tailContinuation, error) {
+	if form.RestParam != "" {
+		if len(argNodes) < len(form.Params) {
+			return Value{}, nil, fmt.Errorf("form: expected at least %d args, got %d", len(form.Params), len(argNodes))
+		}
+	} else {
+		if len(argNodes) != len(form.Params) {
+			return Value{}, nil, fmt.Errorf("form: expected %d args, got %d", len(form.Params), len(argNodes))
+		}
+	}
+	args := make([]Value, len(argNodes))
+	for i, argNode := range argNodes {
+		args[i] = nodeToValue(argNode)
+	}
+	expansion, err := e.CallFnWithValues(form, args)
+	if err != nil {
+		return Value{}, nil, err
+	}
+	expansionNode, err := valueToNode(expansion)
+	if err != nil {
+		return Value{}, nil, fmt.Errorf("form expansion: %w", err)
+	}
+	return e.evalTail(expansionNode)
 }
 
 // builtinAssert: (assert condition message) — returns true if condition is truthy,
@@ -998,6 +1073,8 @@ func builtinType(args []Value) (Value, error) {
 		return KeywordVal("map"), nil
 	case ValFn:
 		return KeywordVal("fn"), nil
+	case ValForm:
+		return KeywordVal("form"), nil
 	case ValSymbol:
 		return KeywordVal("symbol"), nil
 	case ValNodeRef:
@@ -1129,6 +1206,8 @@ func typeRank(k ValueKind) int {
 		return 9
 	case ValFn:
 		return 10
+	case ValForm:
+		return 11
 	default:
 		return 99
 	}
@@ -1235,7 +1314,7 @@ func compareTwo(a, b Value) (int, error) {
 			}
 		}
 		return 0, nil
-	case ValFn:
+	case ValFn, ValForm:
 		as, bs := a.String(), b.String()
 		if as < bs {
 			return -1, nil

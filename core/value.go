@@ -21,13 +21,15 @@ const (
 	ValKeyword
 	ValSymbol
 	ValNodeRef
+	ValForm
 )
 
 type FnValue struct {
-	Params  []string
-	Body    *Node
-	NodeID  string
-	Closure map[string]Value
+	Params    []string
+	RestParam string
+	Body      *Node
+	NodeID    string
+	Closure   map[string]Value
 }
 
 type Value struct {
@@ -59,6 +61,7 @@ func NilVal() Value        { return Value{Kind: ValNil} }
 func KeywordVal(s string) Value { return Value{Kind: ValKeyword, Str: s} }
 func SymbolVal(s string) Value  { return Value{Kind: ValSymbol, Str: s} }
 func NodeRefVal(s string) Value { return Value{Kind: ValNodeRef, Str: s} }
+func FormVal(fn *FnValue) Value { return Value{Kind: ValForm, Fn: fn} }
 
 // Truthy implements nil-as-flow: nil and false are falsy, everything else is truthy.
 func (v Value) Truthy() bool {
@@ -92,7 +95,25 @@ func (v Value) String() string {
 	case ValNodeRef:
 		return v.Str
 	case ValFn:
-		return fmt.Sprintf("<fn(%s)>", strings.Join(v.Fn.Params, ", "))
+		ps := strings.Join(v.Fn.Params, ", ")
+		if v.Fn.RestParam != "" {
+			if len(v.Fn.Params) > 0 {
+				ps += ", & " + v.Fn.RestParam
+			} else {
+				ps = "& " + v.Fn.RestParam
+			}
+		}
+		return fmt.Sprintf("<fn(%s)>", ps)
+	case ValForm:
+		ps := strings.Join(v.Fn.Params, ", ")
+		if v.Fn.RestParam != "" {
+			if len(v.Fn.Params) > 0 {
+				ps += ", & " + v.Fn.RestParam
+			} else {
+				ps = "& " + v.Fn.RestParam
+			}
+		}
+		return fmt.Sprintf("<form(%s)>", ps)
 	case ValList:
 		elems := *v.List
 		parts := make([]string, len(elems))
@@ -154,6 +175,8 @@ func (v Value) KindName() string {
 		return "Symbol"
 	case ValNodeRef:
 		return "NodeRef"
+	case ValForm:
+		return "Form"
 	default:
 		return "Unknown"
 	}
@@ -251,6 +274,8 @@ func ValueToGo(v Value) (any, error) {
 		return v.Str, nil
 	case ValFn:
 		return nil, fmt.Errorf("cannot serialize Fn to JSON")
+	case ValForm:
+		return nil, fmt.Errorf("cannot serialize Form to JSON")
 	default:
 		return nil, fmt.Errorf("unknown value kind")
 	}

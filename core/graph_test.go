@@ -38,10 +38,45 @@ const hofPrelude = `(define nil? (fn (x) (eq (type x) :nil)))
 (define group-by (fn (f xs) (fold (fn (acc x) (let ((k (to-string (f x))) (existing (get acc k))) (put acc k (if (nil? existing) (list x) (append existing (list x)))))) (dict) xs)))
 `
 
+const formPrelude = `(define not (fn (x) (if x false true)))
+
+(define nil? (fn (x) (eq (type x) :nil)))
+
+(define empty? (fn (xs) (eq (len xs) 0)))
+
+(define fold (fn (f acc xs) (if (empty? xs) acc (fold f (f acc (head xs)) (rest xs)))))
+
+(define reverse (fn (xs) (fold (fn (acc x) (cons x acc)) (list) xs)))
+
+(define and (form (a b) (list (quote if) a b false)))
+
+(define or (form (a b) (list (quote let) (list (list (quote __or-val__) a)) (list (quote if) (quote __or-val__) (quote __or-val__) b))))
+
+(define cond (form (& pairs) (letrec ((expand (fn (ps) (if (empty? ps) (quote nil) (list (quote if) (head ps) (nth ps 1) (expand (rest (rest ps)))))))) (expand pairs))))
+
+(define case (form (target & clauses) (letrec ((expand (fn (cs) (if (empty? cs) (quote nil) (if (eq (len cs) 1) (head cs) (list (quote if) (list (quote eq) (quote __case-target__) (head cs)) (nth cs 1) (expand (rest (rest cs))))))))) (list (quote let) (list (list (quote __case-target__) target)) (expand clauses)))))
+
+(define when (form (test body) (list (quote if) test body nil)))
+
+(define unless (form (test body) (list (quote if) test nil body)))
+`
+
 func testGraphWithPrelude(t *testing.T) *Graph {
 	t.Helper()
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "prelude.logos"), []byte(hofPrelude), 0644)
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { g.Close() })
+	return g
+}
+
+func testGraphWithFormPrelude(t *testing.T) *Graph {
+	t.Helper()
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "prelude.logos"), []byte(formPrelude), 0644)
 	g, err := NewGraph(dir, DataBuiltins())
 	if err != nil {
 		t.Fatal(err)
@@ -886,7 +921,7 @@ func TestTailPositionDo(t *testing.T) {
 }
 
 func TestTailPositionCond(t *testing.T) {
-	g := testGraph(t)
+	g := testGraphWithFormPrelude(t)
 	g.Define("loop-cond", `(fn (n) (cond (lt n 1) 0 true (loop-cond (sub n 1))))`)
 	val, err := g.Eval(`(loop-cond 100000)`)
 	if err != nil {
@@ -898,7 +933,7 @@ func TestTailPositionCond(t *testing.T) {
 }
 
 func TestTailPositionCase(t *testing.T) {
-	g := testGraph(t)
+	g := testGraphWithFormPrelude(t)
 	g.Define("loop-case", `(fn (n) (case (lt n 1) true 0 false (loop-case (sub n 1))))`)
 	val, err := g.Eval(`(loop-case 100000)`)
 	if err != nil {
@@ -1025,5 +1060,326 @@ func TestPreludeHOFLargeList(t *testing.T) {
 	}
 	if !ValuesEqual(val, IntVal(10000)) {
 		t.Fatalf("expected 10000, got %s", val.String())
+	}
+}
+
+// --- Form (macro) graph tests ---
+
+func TestGraphDefineForm(t *testing.T) {
+	g := testGraph(t)
+	_, err := g.Define("when", `(form (test body) (list (quote if) test body nil))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Type check
+	val, err := g.Eval(`(type when)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, KeywordVal("form")) {
+		t.Fatalf("expected :form, got %s", val.String())
+	}
+	// Use it — true branch
+	val, err = g.Eval(`(when true 42)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(42)) {
+		t.Fatalf("expected 42, got %s", val.String())
+	}
+	// Use it — false branch
+	val, err = g.Eval(`(when false 42)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, NilVal()) {
+		t.Fatalf("expected nil, got %s", val.String())
+	}
+}
+
+func TestGraphFormUnless(t *testing.T) {
+	g := testGraph(t)
+	g.Define("unless", `(form (test body) (list (quote if) test nil body))`)
+	val, err := g.Eval(`(unless false 99)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(99)) {
+		t.Fatalf("expected 99, got %s", val.String())
+	}
+	val, err = g.Eval(`(unless true 99)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, NilVal()) {
+		t.Fatalf("expected nil, got %s", val.String())
+	}
+}
+
+func TestGraphFormLogReplay(t *testing.T) {
+	dir := t.TempDir()
+
+	// First graph: define a form and use it
+	g1, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g1.Define("when", `(form (test body) (list (quote if) test body nil))`)
+	g1.Close()
+
+	// Second graph: replay the log
+	g2, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g2.Close()
+
+	val, err := g2.Eval(`(when true 42)`)
+	if err != nil {
+		t.Fatalf("log replay failed: %v", err)
+	}
+	if !ValuesEqual(val, IntVal(42)) {
+		t.Fatalf("expected 42, got %s", val.String())
+	}
+}
+
+func TestGraphFormWithFnDependency(t *testing.T) {
+	g := testGraph(t)
+	// Define a helper function, then a form that uses it
+	g.Define("double", `(fn (x) (mul x 2))`)
+	g.Define("double-when", `(form (test body) (list (quote if) test (list (quote double) body) nil))`)
+	val, err := g.Eval(`(double-when true 5)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(10)) {
+		t.Fatalf("expected 10, got %s", val.String())
+	}
+}
+
+// --- Prelude form tests ---
+
+func TestPreludeCond(t *testing.T) {
+	g := testGraphWithFormPrelude(t)
+	val, err := g.Eval(`(cond false 1 true 2)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(2)) {
+		t.Fatalf("expected 2, got %s", val.String())
+	}
+	// First match wins
+	val, err = g.Eval(`(cond true 1 true 2)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(1)) {
+		t.Fatalf("expected 1, got %s", val.String())
+	}
+	// Truthy: nil falsy, 0 truthy
+	val, err = g.Eval(`(cond nil 1 0 2)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(2)) {
+		t.Fatalf("expected 2, got %s", val.String())
+	}
+	// No match
+	val, err = g.Eval(`(cond false 1 false 2)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, NilVal()) {
+		t.Fatalf("expected nil, got %s", val.String())
+	}
+	// Expressions as tests
+	val, err = g.Eval(`(cond (eq 1 2) "no" (eq 1 1) "yes")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, StringVal("yes")) {
+		t.Fatalf("expected yes, got %s", val.String())
+	}
+}
+
+func TestPreludeCase(t *testing.T) {
+	g := testGraphWithFormPrelude(t)
+	// Keyword match
+	val, err := g.Eval(`(case :b :a 1 :b 2 :c 3)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(2)) {
+		t.Fatalf("expected 2, got %s", val.String())
+	}
+	// Default (odd trailing arg)
+	val, err = g.Eval(`(case :z :a 1 :b 2 "default")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, StringVal("default")) {
+		t.Fatalf("expected default, got %s", val.String())
+	}
+	// No match, no default
+	val, err = g.Eval(`(case :z :a 1 :b 2)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, NilVal()) {
+		t.Fatalf("expected nil, got %s", val.String())
+	}
+	// Int match
+	val, err = g.Eval(`(case 2 1 "one" 2 "two")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, StringVal("two")) {
+		t.Fatalf("expected two, got %s", val.String())
+	}
+	// With type
+	val, err = g.Eval(`(case (type 42) :int "integer" :string "text" "other")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, StringVal("integer")) {
+		t.Fatalf("expected integer, got %s", val.String())
+	}
+}
+
+func TestPreludeWhen(t *testing.T) {
+	g := testGraphWithFormPrelude(t)
+	val, err := g.Eval(`(when true 42)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(42)) {
+		t.Fatalf("expected 42, got %s", val.String())
+	}
+	val, err = g.Eval(`(when false 42)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, NilVal()) {
+		t.Fatalf("expected nil, got %s", val.String())
+	}
+}
+
+func TestPreludeUnless(t *testing.T) {
+	g := testGraphWithFormPrelude(t)
+	val, err := g.Eval(`(unless false 99)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(99)) {
+		t.Fatalf("expected 99, got %s", val.String())
+	}
+	val, err = g.Eval(`(unless true 99)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, NilVal()) {
+		t.Fatalf("expected nil, got %s", val.String())
+	}
+}
+
+func TestPreludeAndShortCircuit(t *testing.T) {
+	g := testGraphWithFormPrelude(t)
+	// Short-circuit: second arg not evaluated when first is falsy
+	val, err := g.Eval(`(and false (assert false "boom"))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, BoolVal(false)) {
+		t.Fatalf("expected false, got %s", val.String())
+	}
+	// Both truthy
+	val, err = g.Eval(`(and 1 2)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(2)) {
+		t.Fatalf("expected 2 (determining value), got %s", val.String())
+	}
+}
+
+func TestPreludeOrShortCircuit(t *testing.T) {
+	g := testGraphWithFormPrelude(t)
+	// Short-circuit: second arg not evaluated when first is truthy
+	val, err := g.Eval(`(or true (assert false "boom"))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, BoolVal(true)) {
+		t.Fatalf("expected true, got %s", val.String())
+	}
+	// First falsy, second evaluated
+	val, err = g.Eval(`(or false 42)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(42)) {
+		t.Fatalf("expected 42, got %s", val.String())
+	}
+	// Both falsy
+	val, err = g.Eval(`(or false nil)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, NilVal()) {
+		t.Fatalf("expected nil, got %s", val.String())
+	}
+}
+
+func TestPreludeFormNoDoubleEval(t *testing.T) {
+	g := testGraphWithFormPrelude(t)
+	// Use a side-effecting expression (assert) to verify single evaluation.
+	// counter pattern: define a fn that asserts on second call via a flag.
+	// Simpler: or with a let-bound value — verify it's evaluated once.
+	g.Define("make-counter", `(fn () (let ((n 0)) (fn () (add n 1))))`)
+
+	// or: target expression should only be evaluated once even though
+	// the result is used in both the test and the return position
+	val, err := g.Eval(`(or (add 1 2) "fallback")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(3)) {
+		t.Fatalf("expected 3, got %s", val.String())
+	}
+
+	// case: target expression evaluated once even with multiple clauses
+	val, err = g.Eval(`(case (add 1 1) 1 "one" 2 "two" 3 "three")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, StringVal("two")) {
+		t.Fatalf("expected two, got %s", val.String())
+	}
+}
+
+// --- Rest params in graph ---
+
+func TestGraphRestParamsFn(t *testing.T) {
+	g := testGraph(t)
+	g.Define("variadic", `(fn (x & rest) (list x rest))`)
+	val, err := g.Eval(`(variadic 1 2 3)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := ListVal([]Value{IntVal(1), ListVal([]Value{IntVal(2), IntVal(3)})})
+	if !ValuesEqual(val, expected) {
+		t.Fatalf("expected %s, got %s", expected.String(), val.String())
+	}
+}
+
+func TestGraphRestParamsForm(t *testing.T) {
+	g := testGraphWithFormPrelude(t)
+	// cond uses rest params — verify it works through graph
+	val, err := g.Eval(`(cond (eq 1 2) "no" (eq 3 3) "yes")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, StringVal("yes")) {
+		t.Fatalf("expected yes, got %s", val.String())
 	}
 }

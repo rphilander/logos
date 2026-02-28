@@ -32,8 +32,7 @@ type Graph struct {
 
 // coreFormKeywords are symbols that should not be resolved during define.
 var coreFormKeywords = map[string]bool{
-	"if": true, "let": true, "letrec": true, "do": true, "fn": true, "quote": true,
-	"cond": true, "case": true,
+	"if": true, "let": true, "letrec": true, "do": true, "fn": true, "form": true, "quote": true,
 	"apply": true, "sort-by": true,
 }
 
@@ -90,7 +89,7 @@ func (g *Graph) makeResolver(ev *Evaluator) Resolver {
 			if err != nil {
 				return Value{}, false
 			}
-			if val.Kind == ValFn {
+			if val.Kind == ValFn || val.Kind == ValForm {
 				val.Fn.NodeID = name
 			}
 			return val, true
@@ -105,7 +104,7 @@ func (g *Graph) makeResolver(ev *Evaluator) Resolver {
 		if err != nil {
 			return Value{}, false
 		}
-		if val.Kind == ValFn {
+		if val.Kind == ValFn || val.Kind == ValForm {
 			val.Fn.NodeID = nodeID
 		}
 		return val, true
@@ -234,7 +233,7 @@ func (g *Graph) resolveAST(node *Node, refs *[]Ref, boundNames map[string]bool) 
 
 		if head.Kind == NodeSymbol {
 			switch head.Str {
-			case "fn":
+			case "fn", "form":
 				newChildren[0] = head
 				if len(node.Children) >= 2 {
 					newChildren[1] = node.Children[1]
@@ -243,7 +242,7 @@ func (g *Graph) resolveAST(node *Node, refs *[]Ref, boundNames map[string]bool) 
 					innerBound := copyBoundNames(boundNames)
 					if len(node.Children) >= 2 && node.Children[1].Kind == NodeList {
 						for _, p := range node.Children[1].Children {
-							if p.Kind == NodeSymbol {
+							if p.Kind == NodeSymbol && p.Str != "&" {
 								innerBound[p.Str] = true
 							}
 						}
