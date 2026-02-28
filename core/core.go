@@ -179,6 +179,8 @@ func (c *Core) handleRequest(msg map[string]any) map[string]any {
 		return c.handleDefine(id, msg)
 	case "delete":
 		return c.handleDelete(id, msg)
+	case "refresh-all":
+		return c.handleRefreshAll(id, msg)
 	default:
 		return errorResponse(id, fmt.Sprintf("unknown op: %s", op))
 	}
@@ -216,13 +218,15 @@ func (c *Core) coreManual(id string) map[string]any {
 			"name":    "logos-core",
 			"version": "3.0.0",
 			"ops": map[string]any{
-				"eval":   "Evaluate a logos expression. Params: expr (string)",
-				"define": "Define a named symbol. Params: name (string), expr (string)",
-				"delete": "Delete a named symbol. Params: name (string)",
+				"eval":        "Evaluate a logos expression. Params: expr (string)",
+				"define":      "Define a named symbol. Params: name (string), expr (string)",
+				"delete":      "Delete a named symbol. Params: name (string)",
+				"refresh-all": "Re-resolve dependents of target symbols. Params: targets ([]string), dry (bool, optional)",
 			},
 			"builtins": []any{
 				"list", "dict", "get", "head", "rest", "empty?", "len", "keys",
 				"eq", "nil?", "to-string", "concat", "modules", "send",
+				"symbols", "node-expr", "ref-by",
 			},
 			"forms": []any{"if", "let", "do", "fn", "quote"},
 		},
@@ -274,6 +278,36 @@ func (c *Core) handleDelete(id string, msg map[string]any) map[string]any {
 		return errorResponse(id, err.Error())
 	}
 	return map[string]any{"id": id, "ok": true, "value": name}
+}
+
+func (c *Core) handleRefreshAll(id string, msg map[string]any) map[string]any {
+	targetsRaw, ok := msg["targets"].([]any)
+	if !ok {
+		return errorResponse(id, "refresh-all: missing 'targets' array")
+	}
+	targets := make([]string, len(targetsRaw))
+	for i, t := range targetsRaw {
+		s, ok := t.(string)
+		if !ok {
+			return errorResponse(id, fmt.Sprintf("refresh-all: target %d must be string", i))
+		}
+		targets[i] = s
+	}
+	dry, _ := msg["dry"].(bool)
+
+	result, err := c.graph.RefreshAll(targets, dry)
+	if err != nil {
+		return errorResponse(id, err.Error())
+	}
+	refreshed := make([]any, len(result.Refreshed))
+	for i, name := range result.Refreshed {
+		refreshed[i] = name
+	}
+	return map[string]any{
+		"id":    id,
+		"ok":    true,
+		"value": map[string]any{"refreshed": refreshed},
+	}
 }
 
 func errorResponse(id, errMsg string) map[string]any {

@@ -124,8 +124,9 @@ func TestEvalFnWrongArity(t *testing.T) {
 
 func TestEvalQuote(t *testing.T) {
 	testEval(t, `(quote 42)`, IntVal(42))
-	testEval(t, `(quote foo)`, StringVal("foo"))
-	testEval(t, `(quote (a b c))`, ListVal([]Value{StringVal("a"), StringVal("b"), StringVal("c")}))
+	testEval(t, `(quote foo)`, SymbolVal("foo"))
+	testEval(t, `(quote (a b c))`, ListVal([]Value{SymbolVal("a"), SymbolVal("b"), SymbolVal("c")}))
+	testEval(t, `(type (quote foo))`, KeywordVal("symbol"))
 }
 
 // --- Data builtins ---

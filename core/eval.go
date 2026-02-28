@@ -582,11 +582,11 @@ func nodeToValue(n *Node) Value {
 	case NodeString:
 		return StringVal(n.Str)
 	case NodeSymbol:
-		return StringVal(n.Str)
+		return SymbolVal(n.Str)
 	case NodeKeyword:
 		return KeywordVal(n.Str)
 	case NodeRef:
-		return StringVal(n.Str)
+		return NodeRefVal(n.Ref)
 	case NodeNil:
 		return NilVal()
 	case NodeList:
@@ -827,6 +827,10 @@ func builtinType(args []Value) (Value, error) {
 		return KeywordVal("map"), nil
 	case ValFn:
 		return KeywordVal("fn"), nil
+	case ValSymbol:
+		return KeywordVal("symbol"), nil
+	case ValNodeRef:
+		return KeywordVal("node-ref"), nil
 	default:
 		return KeywordVal("unknown"), nil
 	}

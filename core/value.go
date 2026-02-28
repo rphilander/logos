@@ -19,6 +19,8 @@ const (
 	ValMap
 	ValNil
 	ValKeyword
+	ValSymbol
+	ValNodeRef
 )
 
 type FnValue struct {
@@ -54,6 +56,8 @@ func MapVal(m map[string]Value) Value {
 }
 func NilVal() Value        { return Value{Kind: ValNil} }
 func KeywordVal(s string) Value { return Value{Kind: ValKeyword, Str: s} }
+func SymbolVal(s string) Value  { return Value{Kind: ValSymbol, Str: s} }
+func NodeRefVal(s string) Value { return Value{Kind: ValNodeRef, Str: s} }
 
 // Truthy implements nil-as-flow: nil and false are falsy, everything else is truthy.
 func (v Value) Truthy() bool {
@@ -82,6 +86,10 @@ func (v Value) String() string {
 		return v.Str
 	case ValKeyword:
 		return ":" + v.Str
+	case ValSymbol:
+		return v.Str
+	case ValNodeRef:
+		return v.Str
 	case ValFn:
 		return fmt.Sprintf("<fn(%s)>", strings.Join(v.Fn.Params, ", "))
 	case ValList:
@@ -141,6 +149,10 @@ func (v Value) KindName() string {
 		return "Nil"
 	case ValKeyword:
 		return "Keyword"
+	case ValSymbol:
+		return "Symbol"
+	case ValNodeRef:
+		return "NodeRef"
 	default:
 		return "Unknown"
 	}
@@ -187,6 +199,10 @@ func ValuesEqual(a, b Value) bool {
 		return true
 	case ValKeyword:
 		return a.Str == b.Str
+	case ValSymbol:
+		return a.Str == b.Str
+	case ValNodeRef:
+		return a.Str == b.Str
 	}
 	return false
 }
@@ -228,6 +244,10 @@ func ValueToGo(v Value) (any, error) {
 			obj[k] = j
 		}
 		return obj, nil
+	case ValSymbol:
+		return "sym:" + v.Str, nil
+	case ValNodeRef:
+		return v.Str, nil
 	case ValFn:
 		return nil, fmt.Errorf("cannot serialize Fn to JSON")
 	default:
@@ -248,6 +268,12 @@ func GoToValue(v any) Value {
 		}
 		return FloatVal(val)
 	case string:
+		if strings.HasPrefix(val, "node:") {
+			return NodeRefVal(val)
+		}
+		if strings.HasPrefix(val, "sym:") {
+			return SymbolVal(val[4:])
+		}
 		if len(val) > 1 && val[0] == ':' {
 			return KeywordVal(val[1:])
 		}

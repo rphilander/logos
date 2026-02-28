@@ -78,6 +78,27 @@ func handleDefine(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallTo
 	return formatResult(resp)
 }
 
+func handleRefreshAll(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	targets, err := request.RequireStringSlice("targets")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	targetsAny := make([]any, len(targets))
+	for i, t := range targets {
+		targetsAny[i] = t
+	}
+	req := map[string]any{"op": "refresh-all", "targets": targetsAny}
+	dry := request.GetBool("dry", false)
+	if dry {
+		req["dry"] = true
+	}
+	resp, err := send(req)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return formatResult(resp)
+}
+
 func handleDelete(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	name, err := request.RequireString("name")
 	if err != nil {
@@ -145,6 +166,20 @@ func main() {
 			),
 		),
 		handleDelete,
+	)
+
+	s.AddTool(
+		mcp.NewTool("logos_refresh_all",
+			mcp.WithDescription("Re-resolve all symbols that depend on the given targets. Creates new nodes, never mutates."),
+			mcp.WithArray("targets",
+				mcp.Required(),
+				mcp.Description("List of symbol names or node IDs to refresh dependents of"),
+			),
+			mcp.WithBoolean("dry",
+				mcp.Description("If true, return list of affected symbols without making changes"),
+			),
+		),
+		handleRefreshAll,
 	)
 
 	if err := server.ServeStdio(s); err != nil {

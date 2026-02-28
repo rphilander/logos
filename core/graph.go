@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -44,6 +45,11 @@ func NewGraph(dir string, builtins map[string]Builtin) (*Graph, error) {
 		symbols:      make(map[string]string),
 		nameCounters: make(map[string]int),
 		logPath:      logPath,
+	}
+
+	// Register graph builtins as closures over the graph.
+	for k, v := range g.graphBuiltins() {
+		builtins[k] = v
 	}
 
 	ev := &Evaluator{
@@ -312,6 +318,198 @@ func (g *Graph) resolveAST(node *Node, refs *[]Ref, boundNames map[string]bool) 
 	default:
 		return node
 	}
+}
+
+// --- Graph builtins ---
+
+func (g *Graph) graphBuiltins() map[string]Builtin {
+	return map[string]Builtin{
+		"symbols":   g.builtinSymbols,
+		"node-expr": g.builtinNodeExpr,
+		"ref-by":    g.builtinRefBy,
+	}
+}
+
+// resolveToNodeID accepts a ValSymbol, ValNodeRef, or ValString and returns the node ID.
+func (g *Graph) resolveToNodeID(v Value) (string, error) {
+	switch v.Kind {
+	case ValSymbol:
+		nodeID, ok := g.symbols[v.Str]
+		if !ok {
+			return "", fmt.Errorf("undefined symbol: %s", v.Str)
+		}
+		return nodeID, nil
+	case ValNodeRef:
+		if _, ok := g.nodes[v.Str]; !ok {
+			return "", fmt.Errorf("unknown node: %s", v.Str)
+		}
+		return v.Str, nil
+	case ValString:
+		if strings.HasPrefix(v.Str, "node:") {
+			if _, ok := g.nodes[v.Str]; !ok {
+				return "", fmt.Errorf("unknown node: %s", v.Str)
+			}
+			return v.Str, nil
+		}
+		nodeID, ok := g.symbols[v.Str]
+		if !ok {
+			return "", fmt.Errorf("undefined symbol: %s", v.Str)
+		}
+		return nodeID, nil
+	default:
+		return "", fmt.Errorf("expected Symbol or NodeRef, got %s", v.KindName())
+	}
+}
+
+func (g *Graph) builtinSymbols(args []Value) (Value, error) {
+	if len(args) != 0 {
+		return Value{}, fmt.Errorf("symbols: expected 0 args, got %d", len(args))
+	}
+	m := make(map[string]Value, len(g.symbols))
+	for name, nodeID := range g.symbols {
+		m[name] = NodeRefVal(nodeID)
+	}
+	return MapVal(m), nil
+}
+
+func (g *Graph) builtinNodeExpr(args []Value) (Value, error) {
+	if len(args) != 1 {
+		return Value{}, fmt.Errorf("node-expr: expected 1 arg, got %d", len(args))
+	}
+	nodeID, err := g.resolveToNodeID(args[0])
+	if err != nil {
+		return Value{}, fmt.Errorf("node-expr: %w", err)
+	}
+	node := g.nodes[nodeID]
+	return nodeToValue(node.Expr), nil
+}
+
+func (g *Graph) builtinRefBy(args []Value) (Value, error) {
+	if len(args) != 1 {
+		return Value{}, fmt.Errorf("ref-by: expected 1 arg, got %d", len(args))
+	}
+	nodeID, err := g.resolveToNodeID(args[0])
+	if err != nil {
+		return Value{}, fmt.Errorf("ref-by: %w", err)
+	}
+	var result []Value
+	for name, symNodeID := range g.symbols {
+		node := g.nodes[symNodeID]
+		for _, ref := range node.Refs {
+			if ref.NodeID == nodeID {
+				result = append(result, SymbolVal(name))
+				break
+			}
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Str < result[j].Str
+	})
+	return ListVal(result), nil
+}
+
+// --- Refresh ---
+
+type RefreshResult struct {
+	Refreshed []string
+}
+
+func (g *Graph) RefreshAll(targets []string, dry bool) (*RefreshResult, error) {
+	// Build target set: for symbol targets match by ref.Symbol,
+	// for node ID targets match by ref.NodeID.
+	targetSymbols := make(map[string]bool)
+	targetNodeIDs := make(map[string]bool)
+	for _, target := range targets {
+		if strings.HasPrefix(target, "node:") {
+			if _, ok := g.nodes[target]; !ok {
+				return nil, fmt.Errorf("refresh-all: unknown node: %s", target)
+			}
+			targetNodeIDs[target] = true
+		} else {
+			if _, ok := g.symbols[target]; !ok {
+				return nil, fmt.Errorf("refresh-all: undefined symbol: %s", target)
+			}
+			targetSymbols[target] = true
+		}
+	}
+
+	// BFS: find all symbols to refresh.
+	var refreshOrder []string
+	refreshed := make(map[string]bool)
+
+	// Find initial dependents.
+	for name, symNodeID := range g.symbols {
+		if targetSymbols[name] {
+			continue // skip targets themselves
+		}
+		node := g.nodes[symNodeID]
+		for _, ref := range node.Refs {
+			if targetSymbols[ref.Symbol] || targetNodeIDs[ref.NodeID] {
+				if !refreshed[name] {
+					refreshed[name] = true
+					refreshOrder = append(refreshOrder, name)
+				}
+				break
+			}
+		}
+	}
+
+	// Cascade: dependents of dependents.
+	for i := 0; i < len(refreshOrder); i++ {
+		current := refreshOrder[i]
+		for name, symNodeID := range g.symbols {
+			if refreshed[name] || targetSymbols[name] {
+				continue
+			}
+			node := g.nodes[symNodeID]
+			for _, ref := range node.Refs {
+				if ref.Symbol == current {
+					refreshed[name] = true
+					refreshOrder = append(refreshOrder, name)
+					break
+				}
+			}
+		}
+	}
+
+	// Sort for deterministic output.
+	sort.Strings(refreshOrder)
+
+	if dry {
+		return &RefreshResult{Refreshed: refreshOrder}, nil
+	}
+
+	// Re-parse and re-resolve each dependent.
+	for _, name := range refreshOrder {
+		currentNodeID := g.symbols[name]
+		node := g.nodes[currentNodeID]
+
+		parsed, err := Parse(node.Source)
+		if err != nil {
+			return nil, fmt.Errorf("refresh-all: re-parse %s: %w", name, err)
+		}
+
+		var refs []Ref
+		resolved := g.resolveAST(parsed, &refs, nil)
+
+		g.nameCounters[name]++
+		newNodeID := fmt.Sprintf("node:%s-%d", name, g.nameCounters[name])
+
+		newNode := &GraphNode{
+			ID:     newNodeID,
+			Expr:   resolved,
+			Refs:   refs,
+			Source: node.Source,
+		}
+		g.nodes[newNodeID] = newNode
+		g.symbols[name] = newNodeID
+
+		if err := g.appendLog(fmt.Sprintf("(define %s %s)", name, node.Source)); err != nil {
+			return nil, fmt.Errorf("refresh-all: log %s: %w", name, err)
+		}
+	}
+
+	return &RefreshResult{Refreshed: refreshOrder}, nil
 }
 
 // --- Log ---
