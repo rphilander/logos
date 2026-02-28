@@ -730,11 +730,9 @@ func DataBuiltins() map[string]Builtin {
 		"get":       builtinGet,
 		"head":      builtinHead,
 		"rest":      builtinRest,
-		"empty?":    builtinEmpty,
 		"len":       builtinLen,
 		"keys":      builtinKeys,
 		"eq":        builtinEq,
-		"nil?":      builtinNilQ,
 		"to-string": builtinToString,
 		"concat":    builtinConcat,
 		"type":      builtinType,
@@ -745,26 +743,15 @@ func DataBuiltins() map[string]Builtin {
 		"div": builtinDiv,
 		"mod": builtinMod,
 		// Comparison
-		"neq": builtinNeq,
-		"lt":  builtinLt,
-		"gt":  builtinGt,
-		"le":  builtinLe,
-		"ge":  builtinGe,
-		// Boolean
-		"and": builtinAnd,
-		"or":  builtinOr,
-		"not": builtinNot,
+		"lt": builtinLt,
+		"gt": builtinGt,
 		// List
-		"cons":    builtinCons,
-		"nth":     builtinNth,
-		"append":  builtinAppend,
-		"reverse": builtinReverse,
-		"uniq":    builtinUniq,
+		"cons":   builtinCons,
+		"nth":    builtinNth,
+		"append": builtinAppend,
 		// Map
-		"put":    builtinPut,
-		"has?":   builtinHas,
-		"dissoc": builtinDissoc,
-		"merge":  builtinMerge,
+		"put":  builtinPut,
+		"has?": builtinHas,
 		// String
 		"split-once": builtinSplitOnce,
 	}
@@ -836,15 +823,7 @@ func builtinRest(args []Value) (Value, error) {
 	return ListVal(elems[1:]), nil
 }
 
-func builtinEmpty(args []Value) (Value, error) {
-	if len(args) != 1 {
-		return Value{}, fmt.Errorf("empty?: expected 1 arg, got %d", len(args))
-	}
-	if args[0].Kind != ValList {
-		return Value{}, fmt.Errorf("empty?: expected List, got %s", args[0].KindName())
-	}
-	return BoolVal(len(*args[0].List) == 0), nil
-}
+
 
 func builtinLen(args []Value) (Value, error) {
 	if len(args) != 1 {
@@ -887,12 +866,7 @@ func builtinEq(args []Value) (Value, error) {
 	return BoolVal(ValuesEqual(args[0], args[1])), nil
 }
 
-func builtinNilQ(args []Value) (Value, error) {
-	if len(args) != 1 {
-		return Value{}, fmt.Errorf("nil?: expected 1 arg, got %d", len(args))
-	}
-	return BoolVal(args[0].Kind == ValNil), nil
-}
+
 
 func builtinToString(args []Value) (Value, error) {
 	if len(args) != 1 {
@@ -1043,19 +1017,39 @@ func builtinMod(args []Value) (Value, error) {
 
 // --- Comparison ---
 
-func builtinNeq(args []Value) (Value, error) {
-	if len(args) != 2 {
-		return Value{}, fmt.Errorf("neq: expected 2 args, got %d", len(args))
+
+
+func typeRank(k ValueKind) int {
+	switch k {
+	case ValNil:
+		return 0
+	case ValBool:
+		return 1
+	case ValInt:
+		return 2
+	case ValFloat:
+		return 3
+	case ValString:
+		return 4
+	case ValKeyword:
+		return 5
+	case ValSymbol:
+		return 6
+	case ValNodeRef:
+		return 7
+	case ValList:
+		return 8
+	case ValMap:
+		return 9
+	case ValFn:
+		return 10
+	default:
+		return 99
 	}
-	return BoolVal(!ValuesEqual(args[0], args[1])), nil
 }
 
-func compareValues(name string, args []Value) (int, error) {
-	if len(args) != 2 {
-		return 0, fmt.Errorf("%s: expected 2 args, got %d", name, len(args))
-	}
-	a, b := args[0], args[1]
-	// Numeric comparison with promotion
+func compareTwo(a, b Value) (int, error) {
+	// Numeric promotion: int and float are cross-comparable
 	if (a.Kind == ValInt || a.Kind == ValFloat) && (b.Kind == ValInt || b.Kind == ValFloat) {
 		var fa, fb float64
 		if a.Kind == ValInt {
@@ -1076,8 +1070,27 @@ func compareValues(name string, args []Value) (int, error) {
 		}
 		return 0, nil
 	}
-	// String comparison
-	if a.Kind == ValString && b.Kind == ValString {
+	// Different types: compare by rank
+	ra, rb := typeRank(a.Kind), typeRank(b.Kind)
+	if ra != rb {
+		if ra < rb {
+			return -1, nil
+		}
+		return 1, nil
+	}
+	// Same type
+	switch a.Kind {
+	case ValNil:
+		return 0, nil
+	case ValBool:
+		if a.Bool == b.Bool {
+			return 0, nil
+		}
+		if !a.Bool {
+			return -1, nil // false < true
+		}
+		return 1, nil
+	case ValString, ValKeyword, ValSymbol, ValNodeRef:
 		if a.Str < b.Str {
 			return -1, nil
 		}
@@ -1085,8 +1098,75 @@ func compareValues(name string, args []Value) (int, error) {
 			return 1, nil
 		}
 		return 0, nil
+	case ValList:
+		as, bs := *a.List, *b.List
+		for i := 0; i < len(as) && i < len(bs); i++ {
+			cmp, err := compareTwo(as[i], bs[i])
+			if err != nil {
+				return 0, err
+			}
+			if cmp != 0 {
+				return cmp, nil
+			}
+		}
+		if len(as) < len(bs) {
+			return -1, nil
+		}
+		if len(as) > len(bs) {
+			return 1, nil
+		}
+		return 0, nil
+	case ValMap:
+		am, bm := *a.Map, *b.Map
+		// Collect and sort keys from both maps
+		keySet := make(map[string]bool)
+		for k := range am {
+			keySet[k] = true
+		}
+		for k := range bm {
+			keySet[k] = true
+		}
+		keys := make([]string, 0, len(keySet))
+		for k := range keySet {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			av, aok := am[k]
+			bv, bok := bm[k]
+			if aok && !bok {
+				return 1, nil
+			}
+			if !aok && bok {
+				return -1, nil
+			}
+			cmp, err := compareTwo(av, bv)
+			if err != nil {
+				return 0, err
+			}
+			if cmp != 0 {
+				return cmp, nil
+			}
+		}
+		return 0, nil
+	case ValFn:
+		as, bs := a.String(), b.String()
+		if as < bs {
+			return -1, nil
+		}
+		if as > bs {
+			return 1, nil
+		}
+		return 0, nil
 	}
-	return 0, fmt.Errorf("%s: cannot compare %s and %s", name, a.KindName(), b.KindName())
+	return 0, nil
+}
+
+func compareValues(name string, args []Value) (int, error) {
+	if len(args) != 2 {
+		return 0, fmt.Errorf("%s: expected 2 args, got %d", name, len(args))
+	}
+	return compareTwo(args[0], args[1])
 }
 
 func builtinLt(args []Value) (Value, error) {
@@ -1105,44 +1185,7 @@ func builtinGt(args []Value) (Value, error) {
 	return BoolVal(cmp > 0), nil
 }
 
-func builtinLe(args []Value) (Value, error) {
-	cmp, err := compareValues("le", args)
-	if err != nil {
-		return Value{}, err
-	}
-	return BoolVal(cmp <= 0), nil
-}
 
-func builtinGe(args []Value) (Value, error) {
-	cmp, err := compareValues("ge", args)
-	if err != nil {
-		return Value{}, err
-	}
-	return BoolVal(cmp >= 0), nil
-}
-
-// --- Boolean ---
-
-func builtinAnd(args []Value) (Value, error) {
-	if len(args) != 2 {
-		return Value{}, fmt.Errorf("and: expected 2 args, got %d", len(args))
-	}
-	return BoolVal(args[0].Truthy() && args[1].Truthy()), nil
-}
-
-func builtinOr(args []Value) (Value, error) {
-	if len(args) != 2 {
-		return Value{}, fmt.Errorf("or: expected 2 args, got %d", len(args))
-	}
-	return BoolVal(args[0].Truthy() || args[1].Truthy()), nil
-}
-
-func builtinNot(args []Value) (Value, error) {
-	if len(args) != 1 {
-		return Value{}, fmt.Errorf("not: expected 1 arg, got %d", len(args))
-	}
-	return BoolVal(!args[0].Truthy()), nil
-}
 
 // --- List ---
 
@@ -1192,45 +1235,6 @@ func builtinAppend(args []Value) (Value, error) {
 	return ListVal(result), nil
 }
 
-func builtinReverse(args []Value) (Value, error) {
-	if len(args) != 1 {
-		return Value{}, fmt.Errorf("reverse: expected 1 arg, got %d", len(args))
-	}
-	if args[0].Kind != ValList {
-		return Value{}, fmt.Errorf("reverse: expected List, got %s", args[0].KindName())
-	}
-	elems := *args[0].List
-	result := make([]Value, len(elems))
-	for i, e := range elems {
-		result[len(elems)-1-i] = e
-	}
-	return ListVal(result), nil
-}
-
-func builtinUniq(args []Value) (Value, error) {
-	if len(args) != 1 {
-		return Value{}, fmt.Errorf("uniq: expected 1 arg, got %d", len(args))
-	}
-	if args[0].Kind != ValList {
-		return Value{}, fmt.Errorf("uniq: expected List, got %s", args[0].KindName())
-	}
-	elems := *args[0].List
-	var result []Value
-	for _, e := range elems {
-		found := false
-		for _, r := range result {
-			if ValuesEqual(e, r) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			result = append(result, e)
-		}
-	}
-	return ListVal(result), nil
-}
-
 // --- Map ops ---
 
 func builtinPut(args []Value) (Value, error) {
@@ -1264,44 +1268,6 @@ func builtinHas(args []Value) (Value, error) {
 	}
 	_, ok := (*args[0].Map)[args[1].Str]
 	return BoolVal(ok), nil
-}
-
-func builtinDissoc(args []Value) (Value, error) {
-	if len(args) != 2 {
-		return Value{}, fmt.Errorf("dissoc: expected 2 args, got %d", len(args))
-	}
-	if args[0].Kind != ValMap {
-		return Value{}, fmt.Errorf("dissoc: first arg must be Map, got %s", args[0].KindName())
-	}
-	if args[1].Kind != ValString && args[1].Kind != ValKeyword {
-		return Value{}, fmt.Errorf("dissoc: key must be String or Keyword, got %s", args[1].KindName())
-	}
-	orig := *args[0].Map
-	m := make(map[string]Value, len(orig))
-	for k, v := range orig {
-		if k != args[1].Str {
-			m[k] = v
-		}
-	}
-	return MapVal(m), nil
-}
-
-func builtinMerge(args []Value) (Value, error) {
-	if len(args) != 2 {
-		return Value{}, fmt.Errorf("merge: expected 2 args, got %d", len(args))
-	}
-	if args[0].Kind != ValMap || args[1].Kind != ValMap {
-		return Value{}, fmt.Errorf("merge: expected two Maps, got %s and %s", args[0].KindName(), args[1].KindName())
-	}
-	a, b := *args[0].Map, *args[1].Map
-	m := make(map[string]Value, len(a)+len(b))
-	for k, v := range a {
-		m[k] = v
-	}
-	for k, v := range b {
-		m[k] = v
-	}
-	return MapVal(m), nil
 }
 
 // --- String ops ---

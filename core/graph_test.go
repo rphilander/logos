@@ -19,15 +19,21 @@ func testGraph(t *testing.T) *Graph {
 	return g
 }
 
-const hofPrelude = `(define map-acc (fn (f acc xs) (if (empty? xs) (reverse acc) (map-acc f (cons (f (head xs)) acc) (rest xs)))))
+const hofPrelude = `(define nil? (fn (x) (eq (type x) :nil)))
+
+(define empty? (fn (xs) (eq (len xs) 0)))
+
+(define fold (fn (f acc xs) (if (empty? xs) acc (fold f (f acc (head xs)) (rest xs)))))
+
+(define reverse (fn (xs) (fold (fn (acc x) (cons x acc)) (list) xs)))
+
+(define map-acc (fn (f acc xs) (if (empty? xs) (reverse acc) (map-acc f (cons (f (head xs)) acc) (rest xs)))))
 
 (define map (fn (f xs) (map-acc f (list) xs)))
 
 (define filter-acc (fn (f acc xs) (if (empty? xs) (reverse acc) (if (f (head xs)) (filter-acc f (cons (head xs) acc) (rest xs)) (filter-acc f acc (rest xs))))))
 
 (define filter (fn (f xs) (filter-acc f (list) xs)))
-
-(define fold (fn (f acc xs) (if (empty? xs) acc (fold f (f acc (head xs)) (rest xs)))))
 
 (define group-by (fn (f xs) (fold (fn (acc x) (let ((k (to-string (f x))) (existing (get acc k))) (put acc k (if (nil? existing) (list x) (append existing (list x)))))) (dict) xs)))
 `
@@ -820,7 +826,7 @@ func TestGraphAssertFailInDefinedFn(t *testing.T) {
 
 func TestRecursionFactorial(t *testing.T) {
 	g := testGraph(t)
-	g.Define("factorial", `(fn (n) (if (le n 1) 1 (mul n (factorial (sub n 1)))))`)
+	g.Define("factorial", `(fn (n) (if (lt n 2) 1 (mul n (factorial (sub n 1)))))`)
 	val, err := g.Eval(`(factorial 10)`)
 	if err != nil {
 		t.Fatal(err)
@@ -832,7 +838,7 @@ func TestRecursionFactorial(t *testing.T) {
 
 func TestTailRecursionDeep(t *testing.T) {
 	g := testGraph(t)
-	g.Define("count-down", `(fn (n) (if (le n 0) 0 (count-down (sub n 1))))`)
+	g.Define("count-down", `(fn (n) (if (lt n 1) 0 (count-down (sub n 1))))`)
 	// Without TCO, 100000 would stack overflow
 	val, err := g.Eval(`(count-down 100000)`)
 	if err != nil {
@@ -845,7 +851,7 @@ func TestTailRecursionDeep(t *testing.T) {
 
 func TestTailRecursiveAccumulator(t *testing.T) {
 	g := testGraph(t)
-	g.Define("my-sum", `(fn (acc xs) (if (empty? xs) acc (my-sum (add acc (head xs)) (rest xs))))`)
+	g.Define("my-sum", `(fn (acc xs) (if (eq (len xs) 0) acc (my-sum (add acc (head xs)) (rest xs))))`)
 	val, err := g.Eval(`(my-sum 0 (list 1 2 3 4 5))`)
 	if err != nil {
 		t.Fatal(err)
@@ -857,7 +863,7 @@ func TestTailRecursiveAccumulator(t *testing.T) {
 
 func TestTailPositionLet(t *testing.T) {
 	g := testGraph(t)
-	g.Define("loop", `(fn (n) (let ((m (sub n 1))) (if (le m 0) 0 (loop m))))`)
+	g.Define("loop", `(fn (n) (let ((m (sub n 1))) (if (lt m 1) 0 (loop m))))`)
 	val, err := g.Eval(`(loop 100000)`)
 	if err != nil {
 		t.Fatal(err)
@@ -869,7 +875,7 @@ func TestTailPositionLet(t *testing.T) {
 
 func TestTailPositionDo(t *testing.T) {
 	g := testGraph(t)
-	g.Define("loop-do", `(fn (n) (do nil (if (le n 0) 0 (loop-do (sub n 1)))))`)
+	g.Define("loop-do", `(fn (n) (do nil (if (lt n 1) 0 (loop-do (sub n 1)))))`)
 	val, err := g.Eval(`(loop-do 100000)`)
 	if err != nil {
 		t.Fatal(err)
@@ -881,7 +887,7 @@ func TestTailPositionDo(t *testing.T) {
 
 func TestTailPositionCond(t *testing.T) {
 	g := testGraph(t)
-	g.Define("loop-cond", `(fn (n) (cond (le n 0) 0 true (loop-cond (sub n 1))))`)
+	g.Define("loop-cond", `(fn (n) (cond (lt n 1) 0 true (loop-cond (sub n 1))))`)
 	val, err := g.Eval(`(loop-cond 100000)`)
 	if err != nil {
 		t.Fatal(err)
@@ -893,7 +899,7 @@ func TestTailPositionCond(t *testing.T) {
 
 func TestTailPositionCase(t *testing.T) {
 	g := testGraph(t)
-	g.Define("loop-case", `(fn (n) (case (le n 0) true 0 false (loop-case (sub n 1))))`)
+	g.Define("loop-case", `(fn (n) (case (lt n 1) true 0 false (loop-case (sub n 1))))`)
 	val, err := g.Eval(`(loop-case 100000)`)
 	if err != nil {
 		t.Fatal(err)
@@ -905,8 +911,8 @@ func TestTailPositionCase(t *testing.T) {
 
 func TestMutualRecursion(t *testing.T) {
 	g := testGraph(t)
-	g.Define("my-even", `(fn (n) (if (le n 0) true (my-odd (sub n 1))))`)
-	g.Define("my-odd", `(fn (n) (if (le n 0) false (my-even (sub n 1))))`)
+	g.Define("my-even", `(fn (n) (if (lt n 1) true (my-odd (sub n 1))))`)
+	g.Define("my-odd", `(fn (n) (if (lt n 1) false (my-even (sub n 1))))`)
 	val, err := g.Eval(`(my-even 100000)`)
 	if err != nil {
 		t.Fatal(err)
@@ -1002,7 +1008,7 @@ func TestPreludeGroupBy(t *testing.T) {
 func TestPreludeHOFLargeList(t *testing.T) {
 	g := testGraphWithPrelude(t)
 	// Build a large list via tail-recursive range
-	g.Define("range-acc", `(fn (n acc) (if (le n 0) acc (range-acc (sub n 1) (cons n acc))))`)
+	g.Define("range-acc", `(fn (n acc) (if (lt n 1) acc (range-acc (sub n 1) (cons n acc))))`)
 	g.Define("my-range", `(fn (n) (range-acc n (list)))`)
 	// fold over 10000 elements: sum 1..10000 = 50005000
 	val, err := g.Eval(`(fold (fn (acc x) (add acc x)) 0 (my-range 10000))`)
