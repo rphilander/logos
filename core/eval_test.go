@@ -186,6 +186,192 @@ func TestBuiltinConcat(t *testing.T) {
 	testEval(t, `(concat "hello" " " "world")`, StringVal("hello world"))
 }
 
+// --- Arithmetic ---
+
+func TestBuiltinAdd(t *testing.T) {
+	testEval(t, `(add 1 2)`, IntVal(3))
+	testEval(t, `(add 1 2.5)`, FloatVal(3.5))
+	testEval(t, `(add 1.5 2.5)`, FloatVal(4.0))
+}
+
+func TestBuiltinSub(t *testing.T) {
+	testEval(t, `(sub 5 3)`, IntVal(2))
+	testEval(t, `(sub 5 2.5)`, FloatVal(2.5))
+}
+
+func TestBuiltinMul(t *testing.T) {
+	testEval(t, `(mul 3 4)`, IntVal(12))
+	testEval(t, `(mul 3 1.5)`, FloatVal(4.5))
+}
+
+func TestBuiltinDiv(t *testing.T) {
+	testEval(t, `(div 10 3)`, IntVal(3))
+	testEval(t, `(div 10 3.0)`, FloatVal(10.0/3.0))
+	testEvalError(t, `(div 1 0)`)
+}
+
+func TestBuiltinMod(t *testing.T) {
+	testEval(t, `(mod 10 3)`, IntVal(1))
+	testEvalError(t, `(mod 10 0)`)
+	testEvalError(t, `(mod 1.5 2)`)
+}
+
+// --- Comparison ---
+
+func TestBuiltinNeq(t *testing.T) {
+	testEval(t, `(neq 1 2)`, BoolVal(true))
+	testEval(t, `(neq 1 1)`, BoolVal(false))
+}
+
+func TestBuiltinLtGt(t *testing.T) {
+	testEval(t, `(lt 1 2)`, BoolVal(true))
+	testEval(t, `(lt 2 1)`, BoolVal(false))
+	testEval(t, `(gt 2 1)`, BoolVal(true))
+	testEval(t, `(gt 1 2)`, BoolVal(false))
+}
+
+func TestBuiltinLeGe(t *testing.T) {
+	testEval(t, `(le 1 1)`, BoolVal(true))
+	testEval(t, `(le 1 2)`, BoolVal(true))
+	testEval(t, `(le 2 1)`, BoolVal(false))
+	testEval(t, `(ge 1 1)`, BoolVal(true))
+	testEval(t, `(ge 2 1)`, BoolVal(true))
+	testEval(t, `(ge 1 2)`, BoolVal(false))
+}
+
+func TestComparisonMixed(t *testing.T) {
+	testEval(t, `(lt 1 2.5)`, BoolVal(true))
+	testEval(t, `(gt 3.0 2)`, BoolVal(true))
+}
+
+func TestComparisonStrings(t *testing.T) {
+	testEval(t, `(lt "a" "b")`, BoolVal(true))
+	testEval(t, `(gt "b" "a")`, BoolVal(true))
+}
+
+// --- Boolean ---
+
+func TestBuiltinAnd(t *testing.T) {
+	testEval(t, `(and true true)`, BoolVal(true))
+	testEval(t, `(and true false)`, BoolVal(false))
+	testEval(t, `(and 1 2)`, BoolVal(true))
+	testEval(t, `(and 1 nil)`, BoolVal(false))
+}
+
+func TestBuiltinOr(t *testing.T) {
+	testEval(t, `(or false false)`, BoolVal(false))
+	testEval(t, `(or false true)`, BoolVal(true))
+	testEval(t, `(or nil 1)`, BoolVal(true))
+}
+
+func TestBuiltinNot(t *testing.T) {
+	testEval(t, `(not true)`, BoolVal(false))
+	testEval(t, `(not false)`, BoolVal(true))
+	testEval(t, `(not nil)`, BoolVal(true))
+	testEval(t, `(not 0)`, BoolVal(false))
+}
+
+// --- Higher-order ---
+
+func TestEvalMap(t *testing.T) {
+	testEval(t, `(map (fn (x) (add x 1)) (list 1 2 3))`, ListVal([]Value{IntVal(2), IntVal(3), IntVal(4)}))
+	testEval(t, `(map (fn (x) (mul x x)) (list))`, ListVal([]Value{}))
+}
+
+func TestEvalFilter(t *testing.T) {
+	testEval(t, `(filter (fn (x) (gt x 2)) (list 1 2 3 4))`, ListVal([]Value{IntVal(3), IntVal(4)}))
+	testEval(t, `(filter (fn (x) false) (list 1 2))`, ListVal([]Value{}))
+}
+
+func TestEvalFold(t *testing.T) {
+	testEval(t, `(fold (fn (acc x) (add acc x)) 0 (list 1 2 3))`, IntVal(6))
+	testEval(t, `(fold (fn (acc x) (add acc 1)) 0 (list))`, IntVal(0))
+}
+
+func TestEvalApply(t *testing.T) {
+	testEval(t, `(apply (fn (a b) (add a b)) (list 3 4))`, IntVal(7))
+}
+
+func TestEvalSortBy(t *testing.T) {
+	testEval(t, `(sort-by (fn (x) x) (list 3 1 2))`, ListVal([]Value{IntVal(1), IntVal(2), IntVal(3)}))
+	testEval(t, `(sort-by (fn (x) x) :desc (list 3 1 2))`, ListVal([]Value{IntVal(3), IntVal(2), IntVal(1)}))
+}
+
+func TestEvalGroupBy(t *testing.T) {
+	ev := &Evaluator{Builtins: DataBuiltins()}
+	val, err := ev.EvalString(`(group-by (fn (x) (mod x 2)) (list 1 2 3 4))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val.Kind != ValMap {
+		t.Fatalf("expected Map, got %s", val.KindName())
+	}
+	m := *val.Map
+	if len(m) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(m))
+	}
+}
+
+// --- List ops ---
+
+func TestBuiltinCons(t *testing.T) {
+	testEval(t, `(cons 0 (list 1 2))`, ListVal([]Value{IntVal(0), IntVal(1), IntVal(2)}))
+	testEval(t, `(cons 1 (list))`, ListVal([]Value{IntVal(1)}))
+}
+
+func TestBuiltinNth(t *testing.T) {
+	testEval(t, `(nth (list 10 20 30) 0)`, IntVal(10))
+	testEval(t, `(nth (list 10 20 30) 2)`, IntVal(30))
+	testEval(t, `(nth (list 10 20 30) 5)`, NilVal())
+}
+
+func TestBuiltinAppend(t *testing.T) {
+	testEval(t, `(append (list 1 2) (list 3 4))`, ListVal([]Value{IntVal(1), IntVal(2), IntVal(3), IntVal(4)}))
+	testEval(t, `(append (list) (list 1))`, ListVal([]Value{IntVal(1)}))
+}
+
+func TestBuiltinReverse(t *testing.T) {
+	testEval(t, `(reverse (list 1 2 3))`, ListVal([]Value{IntVal(3), IntVal(2), IntVal(1)}))
+	testEval(t, `(reverse (list))`, ListVal([]Value{}))
+}
+
+func TestBuiltinUniq(t *testing.T) {
+	testEval(t, `(uniq (list 1 2 1 3 2))`, ListVal([]Value{IntVal(1), IntVal(2), IntVal(3)}))
+}
+
+// --- Map ops ---
+
+func TestBuiltinPut(t *testing.T) {
+	testEval(t, `(get (put (dict "a" 1) "b" 2) "b")`, IntVal(2))
+	testEval(t, `(get (put (dict :a 1) :b 2) :b)`, IntVal(2))
+}
+
+func TestBuiltinHas(t *testing.T) {
+	testEval(t, `(has? (dict "a" 1) "a")`, BoolVal(true))
+	testEval(t, `(has? (dict "a" 1) "b")`, BoolVal(false))
+	testEval(t, `(has? (dict :x 1) :x)`, BoolVal(true))
+}
+
+func TestBuiltinDissoc(t *testing.T) {
+	testEval(t, `(len (dissoc (dict "a" 1 "b" 2) "a"))`, IntVal(1))
+	testEval(t, `(get (dissoc (dict "a" 1 "b" 2) "a") "b")`, IntVal(2))
+}
+
+func TestBuiltinMerge(t *testing.T) {
+	testEval(t, `(get (merge (dict "a" 1) (dict "b" 2)) "b")`, IntVal(2))
+	testEval(t, `(get (merge (dict "a" 1) (dict "a" 2)) "a")`, IntVal(2))
+}
+
+// --- String ops ---
+
+func TestBuiltinSplit(t *testing.T) {
+	testEval(t, `(split "a,b,c" ",")`, ListVal([]Value{StringVal("a"), StringVal("b"), StringVal("c")}))
+}
+
+func TestBuiltinJoin(t *testing.T) {
+	testEval(t, `(join ", " (list "a" "b" "c"))`, StringVal("a, b, c"))
+}
+
 // --- Keywords ---
 
 func TestKeywordSelfEval(t *testing.T) {

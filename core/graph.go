@@ -32,6 +32,8 @@ type Graph struct {
 var coreFormKeywords = map[string]bool{
 	"if": true, "let": true, "do": true, "fn": true, "quote": true,
 	"cond": true, "case": true,
+	"map": true, "filter": true, "fold": true, "apply": true,
+	"sort-by": true, "group-by": true,
 }
 
 func NewGraph(dir string, builtins map[string]Builtin) (*Graph, error) {
