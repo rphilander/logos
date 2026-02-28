@@ -1,0 +1,3 @@
+core: LOGOS_DIR=./data LOGOS_SOCK=/tmp/logos.sock LOGOS_MOD_SOCK=/tmp/logos-mod.sock LOGOS_CB_SOCK=/tmp/logos-cb.sock ./core/logos
+mod-time: sleep 1 && LOGOS_MOD_SOCK=/tmp/logos-mod.sock ./mod-time/mod-time
+mod-http: sleep 1 && LOGOS_CB_SOCK=/tmp/logos-cb.sock LOGOS_MOD_SOCK=/tmp/logos-mod.sock ./mod-http-server/mod-http-server

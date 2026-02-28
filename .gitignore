@@ -1,0 +1,11 @@
+# Binaries
+core/logos
+core/logos-cli
+mod-time/mod-time
+mod-http-server/mod-http-server
+
+# Data
+data/
+
+# Sockets
+*.sock
