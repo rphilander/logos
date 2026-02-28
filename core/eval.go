@@ -114,6 +114,8 @@ func (e *Evaluator) evalList(node *Node) (Value, error) {
 			return e.evalIf(node)
 		case "let":
 			return e.evalLet(node)
+		case "letrec":
+			return e.evalLetrec(node)
 		case "do":
 			return e.evalDo(node)
 		case "fn":
@@ -291,6 +293,65 @@ func (e *Evaluator) evalLet(node *Node) (Value, error) {
 	return e.Eval(node.Children[2])
 }
 
+// evalLetrec: (letrec ((f expr1) (g expr2)) body) — recursive bindings.
+// Like let, but back-patches closures so bindings can reference each other.
+func (e *Evaluator) evalLetrec(node *Node) (Value, error) {
+	if _, err := e.evalLetrecBindings(node); err != nil {
+		return Value{}, err
+	}
+	defer e.popScope()
+	return e.Eval(node.Children[2])
+}
+
+// evalLetrecBindings: shared setup for letrec and letrec-tail.
+// Pushes scope, evaluates bindings, back-patches closures. Caller must pop scope.
+func (e *Evaluator) evalLetrecBindings(node *Node) (map[string]Value, error) {
+	if len(node.Children) != 3 {
+		return nil, fmt.Errorf("letrec: expected bindings and body")
+	}
+	bindingsNode := node.Children[1]
+	if bindingsNode.Kind != NodeList {
+		return nil, fmt.Errorf("letrec: bindings must be a list")
+	}
+
+	// Push scope with nil placeholders so fn captures include these names.
+	scope := make(map[string]Value, len(bindingsNode.Children))
+	names := make([]string, len(bindingsNode.Children))
+	for i, pair := range bindingsNode.Children {
+		if pair.Kind != NodeList || len(pair.Children) != 2 {
+			return nil, fmt.Errorf("letrec: each binding must be (name expr)")
+		}
+		nameNode := pair.Children[0]
+		if nameNode.Kind != NodeSymbol {
+			return nil, fmt.Errorf("letrec: binding name must be a symbol")
+		}
+		names[i] = nameNode.Str
+	}
+	e.pushScope(scope)
+
+	// Evaluate bindings sequentially (like let).
+	for i, pair := range bindingsNode.Children {
+		val, err := e.Eval(pair.Children[1])
+		if err != nil {
+			return nil, err
+		}
+		scope[names[i]] = val
+	}
+
+	// Back-patch: update closures of FnValues to see all final bindings.
+	for _, val := range scope {
+		if val.Kind == ValFn && val.Fn != nil {
+			if val.Fn.Closure == nil {
+				val.Fn.Closure = make(map[string]Value, len(names))
+			}
+			for _, name := range names {
+				val.Fn.Closure[name] = scope[name]
+			}
+		}
+	}
+	return scope, nil
+}
+
 // evalDo: (do expr1 expr2 ... exprN) — eval all, return last.
 func (e *Evaluator) evalDo(node *Node) (Value, error) {
 	if len(node.Children) < 2 {
@@ -424,6 +485,8 @@ func (e *Evaluator) evalListTail(node *Node) (Value, *tailContinuation, error) {
 			return e.evalIfTail(node)
 		case "let":
 			return e.evalLetTail(node)
+		case "letrec":
+			return e.evalLetrecTail(node)
 		case "do":
 			return e.evalDoTail(node)
 		case "cond":
@@ -512,6 +575,15 @@ func (e *Evaluator) evalLetTail(node *Node) (Value, *tailContinuation, error) {
 		}
 		bindings[nameNode.Str] = val
 	}
+	return e.evalTail(node.Children[2])
+}
+
+func (e *Evaluator) evalLetrecTail(node *Node) (Value, *tailContinuation, error) {
+	_, err := e.evalLetrecBindings(node)
+	if err != nil {
+		return Value{}, nil, err
+	}
+	// No defer popScope — the trampoline handles scope cleanup via baseScope
 	return e.evalTail(node.Children[2])
 }
 

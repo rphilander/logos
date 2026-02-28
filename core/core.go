@@ -268,7 +268,7 @@ func (c *Core) coreManual(id string) map[string]any {
 				"assert", "traces",
 			},
 			"forms": []any{
-				"if", "let", "do", "fn", "quote",
+				"if", "let", "letrec", "do", "fn", "quote",
 				"cond", "case",
 				"apply", "sort-by",
 			},
