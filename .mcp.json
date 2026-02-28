@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "logos": {
+      "command": "./mcp-logos/mcp-logos",
+      "env": {
+        "LOGOS_SOCK": "/tmp/logos.sock"
+      }
+    }
+  }
+}
