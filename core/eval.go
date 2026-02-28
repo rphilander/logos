@@ -44,35 +44,869 @@ func (e *Evaluator) lookupLocal(name string) (Value, bool) {
 	return Value{}, false
 }
 
+// --- Frame-based iterative evaluator ---
+
+type frameKind int
+
+const (
+	frameFnBody      frameKind = iota // entered fn body; holds scopeBase for cleanup/TCO
+	frameScopeCleanup                 // pop one scope on value pass-through (non-tail let/letrec)
+	frameRef                          // evaluating node-ref expression; restore currentNodeID, tag fn/form
+	frameEvalHead                     // evaluated computed head; dispatch fn/form/error
+	frameBuiltinArg                   // evaluating builtin arguments one by one
+	frameFnArg                        // evaluating fn call arguments one by one
+	frameIfCond                       // evaluated if condition; pick branch
+	frameLetBind                      // evaluating let binding values sequentially
+	frameLetrecBind                   // evaluating letrec binding values sequentially
+	frameDo                           // evaluating do expressions sequentially
+	frameFormExpand                    // form body produced expansion value; convert to AST and eval
+	frameApplyFn                      // evaluated apply's fn arg; now eval list arg
+	frameApplyList                    // evaluated apply's list arg; enter fn body
+)
+
+type frame struct {
+	kind frameKind
+	tail bool // is this frame in tail position?
+
+	// frameFnBody
+	scopeBase   int    // len(e.locals) before pushing closure+bindings
+	savedNodeID string // currentNodeID to restore
+
+	// frameRef
+	refNodeID string // the node ID being evaluated
+
+	// frameEvalHead
+	headNode *Node // original head AST node (for error messages)
+	argNodes []*Node
+
+	// frameBuiltinArg
+	builtin  Builtin
+	builtinDone []Value
+	builtinArgs []*Node
+	builtinIdx  int
+
+	// frameFnArg
+	fn      *FnValue
+	fnDone  []Value
+	fnArgs  []*Node
+	fnIdx   int
+
+	// frameIfCond
+	thenNode *Node
+	elseNode *Node
+
+	// frameLetBind / frameLetrecBind
+	bindings     map[string]Value
+	bindPairs    []*Node
+	bindNames    []string // letrec only: ordered names for back-patching
+	bindIdx      int
+	bodyNode     *Node
+
+	// frameDo
+	doExprs []*Node
+	doIdx   int
+
+	// frameFormExpand (tail inherited from frame.tail)
+
+	// frameApplyFn
+	applyListNode *Node
+
+	// frameApplyList
+	applyFn *FnValue
+}
+
+// Eval evaluates a single AST node.
 func (e *Evaluator) Eval(node *Node) (Value, error) {
-	if e.FuelSet {
-		if e.Fuel <= 0 {
-			return Value{}, fmt.Errorf("fuel exhausted")
+	return e.evalLoop(node)
+}
+
+// CallFnWithValues calls a user-defined function with pre-evaluated Values.
+func (e *Evaluator) CallFnWithValues(fn *FnValue, args []Value) (Value, error) {
+	// Arity check
+	if fn.RestParam != "" {
+		if len(args) < len(fn.Params) {
+			return Value{}, fmt.Errorf("fn: expected at least %d args, got %d", len(fn.Params), len(args))
 		}
-		e.Fuel--
+	} else {
+		if len(args) != len(fn.Params) {
+			return Value{}, fmt.Errorf("fn: expected %d args, got %d", len(fn.Params), len(args))
+		}
 	}
-	switch node.Kind {
-	case NodeInt:
-		return IntVal(node.Int), nil
-	case NodeFloat:
-		return FloatVal(node.Float), nil
-	case NodeBool:
-		return BoolVal(node.Bool), nil
-	case NodeString:
-		return StringVal(node.Str), nil
-	case NodeNil:
-		return NilVal(), nil
-	case NodeKeyword:
-		return KeywordVal(node.Str), nil
-	case NodeSymbol:
-		return e.resolveSymbol(node.Str)
-	case NodeRef:
-		return e.evalRef(node.Ref)
-	case NodeList:
-		return e.evalList(node)
-	default:
-		return Value{}, fmt.Errorf("unknown node kind: %d", node.Kind)
+
+	scopeBase := len(e.locals)
+
+	// Push closure scope
+	if fn.Closure != nil {
+		e.pushScope(fn.Closure)
 	}
+
+	// Push bindings scope
+	bindings := make(map[string]Value, len(fn.Params)+1)
+	for i, param := range fn.Params {
+		bindings[param] = args[i]
+	}
+	if fn.RestParam != "" {
+		bindings[fn.RestParam] = ListVal(args[len(fn.Params):])
+	}
+	e.pushScope(bindings)
+
+	// Save/set currentNodeID
+	prevNodeID := e.currentNodeID
+	if fn.NodeID != "" {
+		e.currentNodeID = fn.NodeID
+	}
+
+	// Pre-seed the stack with a frameFnBody for TCO support
+	stack := []frame{{
+		kind:        frameFnBody,
+		tail:        true,
+		scopeBase:   scopeBase,
+		savedNodeID: prevNodeID,
+	}}
+
+	val, err := e.evalLoopWith(fn.Body, stack, true)
+	// Scope cleanup is handled by evalLoop via frameFnBody
+	return val, err
+}
+
+// evalLoop is the main iterative evaluation loop.
+func (e *Evaluator) evalLoop(startNode *Node) (Value, error) {
+	return e.evalLoopWith(startNode, nil, false)
+}
+
+// evalLoopWith runs the iterative eval loop with an optional pre-seeded stack.
+// startTail indicates whether startNode is in tail position (true when called from CallFnWithValues).
+func (e *Evaluator) evalLoopWith(startNode *Node, stack []frame, startTail bool) (Value, error) {
+	// Save state for re-entrant safety
+	savedLocalsLen := len(e.locals)
+	savedNodeID := e.currentNodeID
+
+	node := startNode
+	evaluating := true
+	tail := startTail // tracks whether current node is in tail position
+	var result Value
+
+	for {
+		if evaluating {
+			// --- Eval phase: process node ---
+			if e.FuelSet {
+				if e.Fuel <= 0 {
+					e.locals = e.locals[:savedLocalsLen]
+					e.currentNodeID = savedNodeID
+					return Value{}, fmt.Errorf("fuel exhausted")
+				}
+				e.Fuel--
+			}
+
+			switch node.Kind {
+			case NodeInt:
+				result = IntVal(node.Int)
+				evaluating = false
+			case NodeFloat:
+				result = FloatVal(node.Float)
+				evaluating = false
+			case NodeBool:
+				result = BoolVal(node.Bool)
+				evaluating = false
+			case NodeString:
+				result = StringVal(node.Str)
+				evaluating = false
+			case NodeNil:
+				result = NilVal()
+				evaluating = false
+			case NodeKeyword:
+				result = KeywordVal(node.Str)
+				evaluating = false
+			case NodeSymbol:
+				val, err := e.resolveSymbol(node.Str)
+				if err != nil {
+					e.locals = e.locals[:savedLocalsLen]
+					e.currentNodeID = savedNodeID
+					return Value{}, err
+				}
+				result = val
+				evaluating = false
+			case NodeRef:
+				// Push frameRef, then evaluate the referenced node's expression
+				if e.ResolveNode == nil {
+					e.locals = e.locals[:savedLocalsLen]
+					e.currentNodeID = savedNodeID
+					return Value{}, fmt.Errorf("cannot resolve node ref %s: no node resolver", node.Ref)
+				}
+				expr, err := e.ResolveNode(node.Ref)
+				if err != nil {
+					e.locals = e.locals[:savedLocalsLen]
+					e.currentNodeID = savedNodeID
+					return Value{}, err
+				}
+				stack = append(stack, frame{
+					kind:      frameRef,
+					refNodeID: node.Ref,
+					savedNodeID: e.currentNodeID,
+				})
+				e.currentNodeID = node.Ref
+				node = expr
+				tail = false // ref content evaluation is not in tail position
+			case NodeList:
+				if len(node.Children) == 0 {
+					e.locals = e.locals[:savedLocalsLen]
+					e.currentNodeID = savedNodeID
+					return Value{}, fmt.Errorf("cannot eval empty list")
+				}
+
+				head := node.Children[0]
+				// tail is the loop variable — tracks whether this list is in tail position
+
+				// Core forms (symbol head)
+				if head.Kind == NodeSymbol {
+					switch head.Str {
+					case "if":
+						if len(node.Children) != 4 {
+							e.locals = e.locals[:savedLocalsLen]
+							e.currentNodeID = savedNodeID
+							return Value{}, fmt.Errorf("if: expected 3 args (cond then else), got %d", len(node.Children)-1)
+						}
+						stack = append(stack, frame{
+							kind:     frameIfCond,
+							tail:     tail,
+							thenNode: node.Children[2],
+							elseNode: node.Children[3],
+						})
+						node = node.Children[1]
+						tail = false // condition is not in tail position
+						continue
+
+					case "let":
+						if len(node.Children) != 3 {
+							e.locals = e.locals[:savedLocalsLen]
+							e.currentNodeID = savedNodeID
+							return Value{}, fmt.Errorf("let: expected bindings and body")
+						}
+						bindingsNode := node.Children[1]
+						if bindingsNode.Kind != NodeList {
+							e.locals = e.locals[:savedLocalsLen]
+							e.currentNodeID = savedNodeID
+							return Value{}, fmt.Errorf("let: bindings must be a list")
+						}
+						bindings := make(map[string]Value, len(bindingsNode.Children))
+						e.pushScope(bindings)
+						if len(bindingsNode.Children) == 0 {
+							// No bindings — eval body directly
+							if !tail {
+								stack = append(stack, frame{kind: frameScopeCleanup})
+							}
+							node = node.Children[2]
+							continue
+						}
+						// Validate first pair
+						pair := bindingsNode.Children[0]
+						if pair.Kind != NodeList || len(pair.Children) != 2 {
+							e.locals = e.locals[:savedLocalsLen]
+							e.currentNodeID = savedNodeID
+							return Value{}, fmt.Errorf("let: each binding must be (name expr)")
+						}
+						if pair.Children[0].Kind != NodeSymbol {
+							e.locals = e.locals[:savedLocalsLen]
+							e.currentNodeID = savedNodeID
+							return Value{}, fmt.Errorf("let: binding name must be a symbol")
+						}
+						stack = append(stack, frame{
+							kind:      frameLetBind,
+							tail:      tail,
+							bindings:  bindings,
+							bindPairs: bindingsNode.Children,
+							bindIdx:   0,
+							bodyNode:  node.Children[2],
+						})
+						node = pair.Children[1]
+						tail = false // binding expressions are not in tail position
+						continue
+
+					case "letrec":
+						if len(node.Children) != 3 {
+							e.locals = e.locals[:savedLocalsLen]
+							e.currentNodeID = savedNodeID
+							return Value{}, fmt.Errorf("letrec: expected bindings and body")
+						}
+						bindingsNode := node.Children[1]
+						if bindingsNode.Kind != NodeList {
+							e.locals = e.locals[:savedLocalsLen]
+							e.currentNodeID = savedNodeID
+							return Value{}, fmt.Errorf("letrec: bindings must be a list")
+						}
+						// Collect names and validate
+						names := make([]string, len(bindingsNode.Children))
+						for i, pair := range bindingsNode.Children {
+							if pair.Kind != NodeList || len(pair.Children) != 2 {
+								e.locals = e.locals[:savedLocalsLen]
+								e.currentNodeID = savedNodeID
+								return Value{}, fmt.Errorf("letrec: each binding must be (name expr)")
+							}
+							if pair.Children[0].Kind != NodeSymbol {
+								e.locals = e.locals[:savedLocalsLen]
+								e.currentNodeID = savedNodeID
+								return Value{}, fmt.Errorf("letrec: binding name must be a symbol")
+							}
+							names[i] = pair.Children[0].Str
+						}
+						scope := make(map[string]Value, len(names))
+						e.pushScope(scope)
+						if len(bindingsNode.Children) == 0 {
+							if !tail {
+								stack = append(stack, frame{kind: frameScopeCleanup})
+							}
+							node = node.Children[2]
+							continue
+						}
+						stack = append(stack, frame{
+							kind:      frameLetrecBind,
+							tail:      tail,
+							bindings:  scope,
+							bindPairs: bindingsNode.Children,
+							bindNames: names,
+							bindIdx:   0,
+							bodyNode:  node.Children[2],
+						})
+						node = bindingsNode.Children[0].Children[1]
+						tail = false // binding expressions are not in tail position
+						continue
+
+					case "do":
+						if len(node.Children) < 2 {
+							e.locals = e.locals[:savedLocalsLen]
+							e.currentNodeID = savedNodeID
+							return Value{}, fmt.Errorf("do: expected at least one expression")
+						}
+						exprs := node.Children[1:]
+						if len(exprs) == 1 {
+							// Single expression: just eval it (inherit tail)
+							node = exprs[0]
+							continue
+						}
+						stack = append(stack, frame{
+							kind:    frameDo,
+							tail:    tail,
+							doExprs: exprs,
+							doIdx:   0,
+						})
+						node = exprs[0]
+						tail = false // non-last do expressions are not in tail position
+						continue
+
+					case "fn":
+						val, err := e.evalFn(node)
+						if err != nil {
+							e.locals = e.locals[:savedLocalsLen]
+							e.currentNodeID = savedNodeID
+							return Value{}, err
+						}
+						result = val
+						evaluating = false
+						continue
+
+					case "form":
+						val, err := e.evalForm(node)
+						if err != nil {
+							e.locals = e.locals[:savedLocalsLen]
+							e.currentNodeID = savedNodeID
+							return Value{}, err
+						}
+						result = val
+						evaluating = false
+						continue
+
+					case "quote":
+						val, err := e.evalQuote(node)
+						if err != nil {
+							e.locals = e.locals[:savedLocalsLen]
+							e.currentNodeID = savedNodeID
+							return Value{}, err
+						}
+						result = val
+						evaluating = false
+						continue
+
+					case "apply":
+						if len(node.Children) != 3 {
+							e.locals = e.locals[:savedLocalsLen]
+							e.currentNodeID = savedNodeID
+							return Value{}, fmt.Errorf("apply: expected 2 args (fn list), got %d", len(node.Children)-1)
+						}
+						stack = append(stack, frame{
+							kind:          frameApplyFn,
+							tail:          tail,
+							applyListNode: node.Children[2],
+						})
+						node = node.Children[1]
+						tail = false // apply args are not in tail position
+						continue
+
+					case "sort-by":
+						// sort-by stays as a leaf operation (calls CallFnWithValues internally)
+						val, err := e.evalSortBy(node)
+						if err != nil {
+							e.locals = e.locals[:savedLocalsLen]
+							e.currentNodeID = savedNodeID
+							return Value{}, err
+						}
+						result = val
+						evaluating = false
+						continue
+					}
+				}
+
+				// Builtins (symbol head, not a core form)
+				if head.Kind == NodeSymbol && e.Builtins != nil {
+					if fn, ok := e.Builtins[head.Str]; ok {
+						argNodes := node.Children[1:]
+						if len(argNodes) == 0 {
+							val, err := fn(nil)
+							if err != nil {
+								e.locals = e.locals[:savedLocalsLen]
+								e.currentNodeID = savedNodeID
+								return Value{}, err
+							}
+							result = val
+							evaluating = false
+							continue
+						}
+						stack = append(stack, frame{
+							kind:        frameBuiltinArg,
+							builtin:     fn,
+							builtinDone: make([]Value, 0, len(argNodes)),
+							builtinArgs: argNodes,
+							builtinIdx:  0,
+						})
+						node = argNodes[0]
+						tail = false // args are not in tail position
+						continue
+					}
+				}
+
+				// Computed head — evaluate it, then dispatch
+				stack = append(stack, frame{
+					kind:     frameEvalHead,
+					tail:     tail,
+					headNode: head,
+					argNodes: node.Children[1:],
+				})
+				node = head
+				tail = false // evaluating the head position is not tail
+				continue
+
+			default:
+				e.locals = e.locals[:savedLocalsLen]
+				e.currentNodeID = savedNodeID
+				return Value{}, fmt.Errorf("unknown node kind: %d", node.Kind)
+			}
+		}
+
+		// --- Value phase: we have `result`, process top frame ---
+		if len(stack) == 0 {
+			return result, nil
+		}
+
+		f := &stack[len(stack)-1]
+
+		switch f.kind {
+		case frameFnBody:
+			// Function body completed. Restore scope and currentNodeID.
+			e.locals = e.locals[:f.scopeBase]
+			e.currentNodeID = f.savedNodeID
+			stack = stack[:len(stack)-1]
+			// result passes through
+
+		case frameScopeCleanup:
+			e.popScope()
+			stack = stack[:len(stack)-1]
+			// result passes through
+
+		case frameRef:
+			e.currentNodeID = f.savedNodeID
+			if result.Kind == ValFn || result.Kind == ValForm {
+				result.Fn.NodeID = f.refNodeID
+			}
+			stack = stack[:len(stack)-1]
+			// result passes through
+
+		case frameEvalHead:
+			headNode := f.headNode
+			argNodes := f.argNodes
+			frameTail := f.tail
+			stack = stack[:len(stack)-1]
+
+			if result.Kind == ValFn {
+				// User-defined fn: evaluate args
+				fn := result.Fn
+				if fn.RestParam != "" {
+					if len(argNodes) < len(fn.Params) {
+						e.locals = e.locals[:savedLocalsLen]
+						e.currentNodeID = savedNodeID
+						return Value{}, fmt.Errorf("fn: expected at least %d args, got %d", len(fn.Params), len(argNodes))
+					}
+				} else {
+					if len(argNodes) != len(fn.Params) {
+						e.locals = e.locals[:savedLocalsLen]
+						e.currentNodeID = savedNodeID
+						return Value{}, fmt.Errorf("fn: expected %d args, got %d", len(fn.Params), len(argNodes))
+					}
+				}
+				if len(argNodes) == 0 {
+					// No args to evaluate — enter fn body directly
+					node = e.enterFnBody(fn, nil, frameTail, &stack)
+					tail = true // fn body is always in tail position
+					evaluating = true
+					continue
+				}
+				stack = append(stack, frame{
+					kind:   frameFnArg,
+					tail:   frameTail,
+					fn:     fn,
+					fnDone: make([]Value, 0, len(argNodes)),
+					fnArgs: argNodes,
+					fnIdx:  0,
+				})
+				node = argNodes[0]
+				tail = false // args are not in tail position
+				evaluating = true
+				continue
+			}
+			if result.Kind == ValForm {
+				formFn := result.Fn
+				// Handle form call
+				n, err := e.handleFormCall(formFn, argNodes, frameTail, &stack)
+				if err != nil {
+					e.locals = e.locals[:savedLocalsLen]
+					e.currentNodeID = savedNodeID
+					return Value{}, err
+				}
+				node = n
+				tail = frameTail // form expansion inherits tail from the form call site
+				evaluating = true
+				continue
+			}
+			if headNode.Kind == NodeSymbol {
+				e.locals = e.locals[:savedLocalsLen]
+				e.currentNodeID = savedNodeID
+				return Value{}, fmt.Errorf("cannot call %s: not a function", headNode.Str)
+			}
+			e.locals = e.locals[:savedLocalsLen]
+			e.currentNodeID = savedNodeID
+			return Value{}, fmt.Errorf("cannot call %s value", result.KindName())
+
+		case frameBuiltinArg:
+			f.builtinDone = append(f.builtinDone, result)
+			f.builtinIdx++
+			if f.builtinIdx < len(f.builtinArgs) {
+				node = f.builtinArgs[f.builtinIdx]
+				evaluating = true
+				continue
+			}
+			// All args evaluated — call builtin
+			fn := f.builtin
+			args := f.builtinDone
+			stack = stack[:len(stack)-1]
+			val, err := fn(args)
+			if err != nil {
+				e.locals = e.locals[:savedLocalsLen]
+				e.currentNodeID = savedNodeID
+				return Value{}, err
+			}
+			result = val
+
+		case frameFnArg:
+			f.fnDone = append(f.fnDone, result)
+			f.fnIdx++
+			if f.fnIdx < len(f.fnArgs) {
+				node = f.fnArgs[f.fnIdx]
+				tail = false // args are not in tail position
+				evaluating = true
+				continue
+			}
+			// All args evaluated — enter fn body
+			fn := f.fn
+			args := f.fnDone
+			frameTail := f.tail
+			stack = stack[:len(stack)-1]
+			node = e.enterFnBody(fn, args, frameTail, &stack)
+			tail = true // fn body is always in tail position
+			evaluating = true
+			continue
+
+		case frameIfCond:
+			thenNode := f.thenNode
+			elseNode := f.elseNode
+			frameTail := f.tail
+			stack = stack[:len(stack)-1]
+			if result.Truthy() {
+				node = thenNode
+			} else {
+				node = elseNode
+			}
+			tail = frameTail // branches inherit tail from the if expression
+			evaluating = true
+			continue
+
+		case frameLetBind:
+			// Store binding value
+			nameStr := f.bindPairs[f.bindIdx].Children[0].Str
+			f.bindings[nameStr] = result
+			f.bindIdx++
+			if f.bindIdx < len(f.bindPairs) {
+				// Validate next pair
+				pair := f.bindPairs[f.bindIdx]
+				if pair.Kind != NodeList || len(pair.Children) != 2 {
+					e.locals = e.locals[:savedLocalsLen]
+					e.currentNodeID = savedNodeID
+					return Value{}, fmt.Errorf("let: each binding must be (name expr)")
+				}
+				if pair.Children[0].Kind != NodeSymbol {
+					e.locals = e.locals[:savedLocalsLen]
+					e.currentNodeID = savedNodeID
+					return Value{}, fmt.Errorf("let: binding name must be a symbol")
+				}
+				node = pair.Children[1]
+				tail = false // binding expressions are not in tail position
+				evaluating = true
+				continue
+			}
+			// All bindings done — eval body
+			bodyNode := f.bodyNode
+			frameTail := f.tail
+			stack = stack[:len(stack)-1]
+			if !frameTail {
+				stack = append(stack, frame{kind: frameScopeCleanup})
+			}
+			node = bodyNode
+			tail = frameTail // body inherits tail from the let expression
+			evaluating = true
+			continue
+
+		case frameLetrecBind:
+			// Store binding value
+			f.bindings[f.bindNames[f.bindIdx]] = result
+			f.bindIdx++
+			if f.bindIdx < len(f.bindPairs) {
+				node = f.bindPairs[f.bindIdx].Children[1]
+				tail = false // binding expressions are not in tail position
+				evaluating = true
+				continue
+			}
+			// All bindings done — back-patch closures, eval body
+			for _, val := range f.bindings {
+				if (val.Kind == ValFn || val.Kind == ValForm) && val.Fn != nil {
+					if val.Fn.Closure == nil {
+						val.Fn.Closure = make(map[string]Value, len(f.bindNames))
+					}
+					for _, name := range f.bindNames {
+						val.Fn.Closure[name] = f.bindings[name]
+					}
+				}
+			}
+			bodyNode := f.bodyNode
+			frameTail := f.tail
+			stack = stack[:len(stack)-1]
+			if !frameTail {
+				stack = append(stack, frame{kind: frameScopeCleanup})
+			}
+			node = bodyNode
+			tail = frameTail // body inherits tail from the letrec expression
+			evaluating = true
+			continue
+
+		case frameDo:
+			f.doIdx++
+			if f.doIdx < len(f.doExprs)-1 {
+				// Not the last expression — discard result, eval next
+				node = f.doExprs[f.doIdx]
+				tail = false // non-last do expressions are not in tail position
+				evaluating = true
+				continue
+			}
+			if f.doIdx == len(f.doExprs)-1 {
+				// Last expression — inherit tail
+				frameTail := f.tail
+				node = f.doExprs[f.doIdx]
+				tail = frameTail // last do expression inherits tail
+				stack = stack[:len(stack)-1]
+				evaluating = true
+				continue
+			}
+			// Past last (shouldn't happen)
+			stack = stack[:len(stack)-1]
+
+		case frameFormExpand:
+			frameTail := f.tail
+			stack = stack[:len(stack)-1]
+			// result is the expansion value — convert to AST and eval
+			expansionNode, err := valueToNode(result)
+			if err != nil {
+				e.locals = e.locals[:savedLocalsLen]
+				e.currentNodeID = savedNodeID
+				return Value{}, fmt.Errorf("form expansion: %w", err)
+			}
+			node = expansionNode
+			tail = frameTail // expansion eval inherits tail from the form call
+			evaluating = true
+			continue
+
+		case frameApplyFn:
+			// result is the fn value
+			if result.Kind == ValForm {
+				e.locals = e.locals[:savedLocalsLen]
+				e.currentNodeID = savedNodeID
+				return Value{}, fmt.Errorf("apply: cannot apply a Form (forms receive unevaluated AST)")
+			}
+			if result.Kind != ValFn {
+				e.locals = e.locals[:savedLocalsLen]
+				e.currentNodeID = savedNodeID
+				return Value{}, fmt.Errorf("apply: first arg must be Fn, got %s", result.KindName())
+			}
+			applyListNode := f.applyListNode
+			frameTail := f.tail
+			fn := result.Fn
+			stack = stack[:len(stack)-1]
+			stack = append(stack, frame{
+				kind:    frameApplyList,
+				tail:    frameTail,
+				applyFn: fn,
+			})
+			node = applyListNode
+			tail = false // apply list arg is not in tail position
+			evaluating = true
+			continue
+
+		case frameApplyList:
+			// result is the list value
+			if result.Kind != ValList {
+				e.locals = e.locals[:savedLocalsLen]
+				e.currentNodeID = savedNodeID
+				return Value{}, fmt.Errorf("apply: second arg must be List, got %s", result.KindName())
+			}
+			fn := f.applyFn
+			args := *result.List
+			frameTail := f.tail
+			stack = stack[:len(stack)-1]
+			// Arity check
+			if fn.RestParam != "" {
+				if len(args) < len(fn.Params) {
+					e.locals = e.locals[:savedLocalsLen]
+					e.currentNodeID = savedNodeID
+					return Value{}, fmt.Errorf("fn: expected at least %d args, got %d", len(fn.Params), len(args))
+				}
+			} else {
+				if len(args) != len(fn.Params) {
+					e.locals = e.locals[:savedLocalsLen]
+					e.currentNodeID = savedNodeID
+					return Value{}, fmt.Errorf("fn: expected %d args, got %d", len(fn.Params), len(args))
+				}
+			}
+			node = e.enterFnBody(fn, args, frameTail, &stack)
+			tail = true // fn body is always in tail position
+			evaluating = true
+			continue
+		}
+	}
+}
+
+// enterFnBody sets up scope for a function call and returns the body node to evaluate.
+// If tail=true, it performs TCO by reusing the nearest frameFnBody.
+func (e *Evaluator) enterFnBody(fn *FnValue, args []Value, tail bool, stack *[]frame) *Node {
+	if tail {
+		// TCO: find nearest frameFnBody and reuse it
+		for i := len(*stack) - 1; i >= 0; i-- {
+			if (*stack)[i].kind == frameFnBody {
+				// Reset scope to that frame's scopeBase
+				scopeBase := (*stack)[i].scopeBase
+				savedNodeID := (*stack)[i].savedNodeID
+				e.locals = e.locals[:scopeBase]
+				e.currentNodeID = savedNodeID
+				// Remove that frame and everything above it
+				*stack = (*stack)[:i]
+				// Push new frameFnBody
+				*stack = append(*stack, frame{
+					kind:        frameFnBody,
+					tail:        true,
+					scopeBase:   scopeBase,
+					savedNodeID: savedNodeID,
+				})
+				// Push closure + bindings
+				if fn.Closure != nil {
+					e.pushScope(fn.Closure)
+				}
+				bindings := make(map[string]Value, len(fn.Params)+1)
+				for i, param := range fn.Params {
+					bindings[param] = args[i]
+				}
+				if fn.RestParam != "" {
+					bindings[fn.RestParam] = ListVal(args[len(fn.Params):])
+				}
+				e.pushScope(bindings)
+				if fn.NodeID != "" {
+					e.currentNodeID = fn.NodeID
+				}
+				return fn.Body
+			}
+		}
+	}
+
+	// Non-tail or no frameFnBody found: push a new one
+	scopeBase := len(e.locals)
+	prevNodeID := e.currentNodeID
+	*stack = append(*stack, frame{
+		kind:        frameFnBody,
+		tail:        true, // body of fn is always tail
+		scopeBase:   scopeBase,
+		savedNodeID: prevNodeID,
+	})
+	if fn.Closure != nil {
+		e.pushScope(fn.Closure)
+	}
+	bindings := make(map[string]Value, len(fn.Params)+1)
+	for i, param := range fn.Params {
+		bindings[param] = args[i]
+	}
+	if fn.RestParam != "" {
+		bindings[fn.RestParam] = ListVal(args[len(fn.Params):])
+	}
+	e.pushScope(bindings)
+	if fn.NodeID != "" {
+		e.currentNodeID = fn.NodeID
+	}
+	return fn.Body
+}
+
+// handleFormCall sets up form expansion. The form body is evaluated via CallFnWithValues
+// (which is re-entrant), then the expansion is converted to AST and evaluated.
+func (e *Evaluator) handleFormCall(formFn *FnValue, argNodes []*Node, tail bool, stack *[]frame) (*Node, error) {
+	if formFn.RestParam != "" {
+		if len(argNodes) < len(formFn.Params) {
+			return nil, fmt.Errorf("form: expected at least %d args, got %d", len(formFn.Params), len(argNodes))
+		}
+	} else {
+		if len(argNodes) != len(formFn.Params) {
+			return nil, fmt.Errorf("form: expected %d args, got %d", len(formFn.Params), len(argNodes))
+		}
+	}
+	// Convert each arg AST to a Value (not evaluated)
+	args := make([]Value, len(argNodes))
+	for i, argNode := range argNodes {
+		args[i] = nodeToValue(argNode)
+	}
+	// Evaluate form body to produce expansion (re-entrant call)
+	expansion, err := e.CallFnWithValues(formFn, args)
+	if err != nil {
+		return nil, err
+	}
+	// Convert expansion back to AST
+	expansionNode, err := valueToNode(expansion)
+	if err != nil {
+		return nil, fmt.Errorf("form expansion: %w", err)
+	}
+	// The expansion will be evaluated in the caller's scope.
+	// If tail, it inherits tail position — no extra frame needed,
+	// the existing frameFnBody on the stack handles TCO.
+	return expansionNode, nil
 }
 
 func (e *Evaluator) resolveSymbol(name string) (Value, error) {
@@ -87,313 +921,7 @@ func (e *Evaluator) resolveSymbol(name string) (Value, error) {
 	return Value{}, fmt.Errorf("unbound symbol: %s", name)
 }
 
-func (e *Evaluator) evalRef(nodeID string) (Value, error) {
-	if e.ResolveNode == nil {
-		return Value{}, fmt.Errorf("cannot resolve node ref %s: no node resolver", nodeID)
-	}
-	expr, err := e.ResolveNode(nodeID)
-	if err != nil {
-		return Value{}, err
-	}
-	prev := e.currentNodeID
-	e.currentNodeID = nodeID
-	val, err := e.Eval(expr)
-	e.currentNodeID = prev
-	if err != nil {
-		return Value{}, err
-	}
-	if val.Kind == ValFn || val.Kind == ValForm {
-		val.Fn.NodeID = nodeID
-	}
-	return val, nil
-}
-
-func (e *Evaluator) evalList(node *Node) (Value, error) {
-	if len(node.Children) == 0 {
-		return Value{}, fmt.Errorf("cannot eval empty list")
-	}
-
-	head := node.Children[0]
-
-	// Core forms
-	if head.Kind == NodeSymbol {
-		switch head.Str {
-		case "if":
-			return e.evalIf(node)
-		case "let":
-			return e.evalLet(node)
-		case "letrec":
-			return e.evalLetrec(node)
-		case "do":
-			return e.evalDo(node)
-		case "fn":
-			return e.evalFn(node)
-		case "form":
-			return e.evalForm(node)
-		case "quote":
-			return e.evalQuote(node)
-		case "apply":
-			return e.evalApply(node)
-		case "sort-by":
-			return e.evalSortBy(node)
-		}
-	}
-
-	// Builtins
-	if head.Kind == NodeSymbol && e.Builtins != nil {
-		if fn, ok := e.Builtins[head.Str]; ok {
-			return e.callBuiltin(fn, node.Children[1:])
-		}
-	}
-
-	// Evaluate head — should produce a function
-	headVal, err := e.Eval(head)
-	if err != nil {
-		if head.Kind == NodeSymbol {
-			return Value{}, fmt.Errorf("unknown function: %s", head.Str)
-		}
-		return Value{}, err
-	}
-	if headVal.Kind == ValFn {
-		return e.callFn(headVal.Fn, node.Children[1:])
-	}
-	if headVal.Kind == ValForm {
-		return e.callForm(headVal.Fn, node.Children[1:])
-	}
-
-	if head.Kind == NodeSymbol {
-		return Value{}, fmt.Errorf("cannot call %s: not a function", head.Str)
-	}
-	return Value{}, fmt.Errorf("cannot call %s value", headVal.KindName())
-}
-
-func (e *Evaluator) callBuiltin(fn Builtin, argNodes []*Node) (Value, error) {
-	args := make([]Value, len(argNodes))
-	for i, child := range argNodes {
-		val, err := e.Eval(child)
-		if err != nil {
-			return Value{}, err
-		}
-		args[i] = val
-	}
-	return fn(args)
-}
-
-// tailContinuation signals a tail call to the trampoline loop.
-// Exported fields for future ToValue() conversion (step evaluator).
-type tailContinuation struct {
-	Fn   *FnValue
-	Args []Value
-}
-
-func (e *Evaluator) callFn(fn *FnValue, argNodes []*Node) (Value, error) {
-	if fn.RestParam != "" {
-		if len(argNodes) < len(fn.Params) {
-			return Value{}, fmt.Errorf("fn: expected at least %d args, got %d", len(fn.Params), len(argNodes))
-		}
-	} else {
-		if len(argNodes) != len(fn.Params) {
-			return Value{}, fmt.Errorf("fn: expected %d args, got %d", len(fn.Params), len(argNodes))
-		}
-	}
-	args := make([]Value, len(argNodes))
-	for i, argNode := range argNodes {
-		val, err := e.Eval(argNode)
-		if err != nil {
-			return Value{}, err
-		}
-		args[i] = val
-	}
-	return e.callFnTrampolined(fn, args)
-}
-
-// CallFnWithValues calls a user-defined function with pre-evaluated Values.
-func (e *Evaluator) CallFnWithValues(fn *FnValue, args []Value) (Value, error) {
-	return e.callFnTrampolined(fn, args)
-}
-
-// callFnTrampolined is the TCO trampoline. It evaluates the function body
-// in tail position. If the body is a tail call, it loops instead of recursing.
-func (e *Evaluator) callFnTrampolined(fn *FnValue, args []Value) (Value, error) {
-	baseScope := len(e.locals)
-	defer func() { e.locals = e.locals[:baseScope] }()
-
-	for {
-		if fn.RestParam != "" {
-			if len(args) < len(fn.Params) {
-				return Value{}, fmt.Errorf("fn: expected at least %d args, got %d", len(fn.Params), len(args))
-			}
-		} else {
-			if len(args) != len(fn.Params) {
-				return Value{}, fmt.Errorf("fn: expected %d args, got %d", len(fn.Params), len(args))
-			}
-		}
-
-		// Reset scope to base (cleans up from previous iteration)
-		e.locals = e.locals[:baseScope]
-
-		// Push closure scope
-		if fn.Closure != nil {
-			e.pushScope(fn.Closure)
-		}
-
-		// Push bindings scope
-		bindings := make(map[string]Value, len(fn.Params)+1)
-		for i, param := range fn.Params {
-			bindings[param] = args[i]
-		}
-		if fn.RestParam != "" {
-			bindings[fn.RestParam] = ListVal(args[len(fn.Params):])
-		}
-		e.pushScope(bindings)
-
-		// Save/set currentNodeID
-		prev := e.currentNodeID
-		if fn.NodeID != "" {
-			e.currentNodeID = fn.NodeID
-		}
-
-		// Evaluate body in tail position
-		val, cont, err := e.evalTail(fn.Body)
-
-		// Restore currentNodeID
-		e.currentNodeID = prev
-
-		if err != nil {
-			return Value{}, err
-		}
-		if cont == nil {
-			return val, nil
-		}
-
-		// Tail call: loop with new fn and args
-		fn = cont.Fn
-		args = cont.Args
-	}
-}
-
-// evalIf: (if cond then else) — uses Truthy, not Bool-only.
-func (e *Evaluator) evalIf(node *Node) (Value, error) {
-	if len(node.Children) != 4 {
-		return Value{}, fmt.Errorf("if: expected 3 args (cond then else), got %d", len(node.Children)-1)
-	}
-	cond, err := e.Eval(node.Children[1])
-	if err != nil {
-		return Value{}, err
-	}
-	if cond.Truthy() {
-		return e.Eval(node.Children[2])
-	}
-	return e.Eval(node.Children[3])
-}
-
-// evalLet: (let ((x expr1) (y expr2)) body) — sequential bindings.
-func (e *Evaluator) evalLet(node *Node) (Value, error) {
-	if len(node.Children) != 3 {
-		return Value{}, fmt.Errorf("let: expected bindings and body")
-	}
-	bindingsNode := node.Children[1]
-	if bindingsNode.Kind != NodeList {
-		return Value{}, fmt.Errorf("let: bindings must be a list")
-	}
-	bindings := make(map[string]Value, len(bindingsNode.Children))
-	e.pushScope(bindings)
-	defer e.popScope()
-
-	for _, pair := range bindingsNode.Children {
-		if pair.Kind != NodeList || len(pair.Children) != 2 {
-			return Value{}, fmt.Errorf("let: each binding must be (name expr)")
-		}
-		nameNode := pair.Children[0]
-		if nameNode.Kind != NodeSymbol {
-			return Value{}, fmt.Errorf("let: binding name must be a symbol")
-		}
-		val, err := e.Eval(pair.Children[1])
-		if err != nil {
-			return Value{}, err
-		}
-		bindings[nameNode.Str] = val
-	}
-	return e.Eval(node.Children[2])
-}
-
-// evalLetrec: (letrec ((f expr1) (g expr2)) body) — recursive bindings.
-// Like let, but back-patches closures so bindings can reference each other.
-func (e *Evaluator) evalLetrec(node *Node) (Value, error) {
-	if _, err := e.evalLetrecBindings(node); err != nil {
-		return Value{}, err
-	}
-	defer e.popScope()
-	return e.Eval(node.Children[2])
-}
-
-// evalLetrecBindings: shared setup for letrec and letrec-tail.
-// Pushes scope, evaluates bindings, back-patches closures. Caller must pop scope.
-func (e *Evaluator) evalLetrecBindings(node *Node) (map[string]Value, error) {
-	if len(node.Children) != 3 {
-		return nil, fmt.Errorf("letrec: expected bindings and body")
-	}
-	bindingsNode := node.Children[1]
-	if bindingsNode.Kind != NodeList {
-		return nil, fmt.Errorf("letrec: bindings must be a list")
-	}
-
-	// Push scope with nil placeholders so fn captures include these names.
-	scope := make(map[string]Value, len(bindingsNode.Children))
-	names := make([]string, len(bindingsNode.Children))
-	for i, pair := range bindingsNode.Children {
-		if pair.Kind != NodeList || len(pair.Children) != 2 {
-			return nil, fmt.Errorf("letrec: each binding must be (name expr)")
-		}
-		nameNode := pair.Children[0]
-		if nameNode.Kind != NodeSymbol {
-			return nil, fmt.Errorf("letrec: binding name must be a symbol")
-		}
-		names[i] = nameNode.Str
-	}
-	e.pushScope(scope)
-
-	// Evaluate bindings sequentially (like let).
-	for i, pair := range bindingsNode.Children {
-		val, err := e.Eval(pair.Children[1])
-		if err != nil {
-			return nil, err
-		}
-		scope[names[i]] = val
-	}
-
-	// Back-patch: update closures of FnValues and FormValues to see all final bindings.
-	for _, val := range scope {
-		if (val.Kind == ValFn || val.Kind == ValForm) && val.Fn != nil {
-			if val.Fn.Closure == nil {
-				val.Fn.Closure = make(map[string]Value, len(names))
-			}
-			for _, name := range names {
-				val.Fn.Closure[name] = scope[name]
-			}
-		}
-	}
-	return scope, nil
-}
-
-// evalDo: (do expr1 expr2 ... exprN) — eval all, return last.
-func (e *Evaluator) evalDo(node *Node) (Value, error) {
-	if len(node.Children) < 2 {
-		return Value{}, fmt.Errorf("do: expected at least one expression")
-	}
-	var result Value
-	var err error
-	for _, child := range node.Children[1:] {
-		result, err = e.Eval(child)
-		if err != nil {
-			return Value{}, err
-		}
-	}
-	return result, nil
-}
-
 // parseFnParams parses a param list, supporting & rest syntax.
-// Returns (positional params, rest param name, error).
 func parseFnParams(kind string, paramsNode *Node) ([]string, string, error) {
 	if paramsNode.Kind != NodeList {
 		return nil, "", fmt.Errorf("%s: params must be a list", kind)
@@ -404,7 +932,6 @@ func parseFnParams(kind string, paramsNode *Node) ([]string, string, error) {
 	for i := 0; i < len(children); i++ {
 		p := children[i]
 		if p.Kind == NodeSymbol && p.Str == "&" {
-			// & must be followed by exactly one symbol
 			if i+1 != len(children)-1 {
 				return nil, "", fmt.Errorf("%s: & must be followed by exactly one rest param at end", kind)
 			}
@@ -432,7 +959,6 @@ func (e *Evaluator) evalFn(node *Node) (Value, error) {
 	if err != nil {
 		return Value{}, err
 	}
-	// Capture enclosing local scope for closure.
 	var closure map[string]Value
 	if len(e.locals) > 0 {
 		closure = make(map[string]Value)
@@ -477,187 +1003,11 @@ func (e *Evaluator) evalForm(node *Node) (Value, error) {
 }
 
 // evalQuote: (quote expr) — return the expression as a value.
-// Converts the AST node to a logos Value representation.
 func (e *Evaluator) evalQuote(node *Node) (Value, error) {
 	if len(node.Children) != 2 {
 		return Value{}, fmt.Errorf("quote: expected 1 arg")
 	}
 	return nodeToValue(node.Children[1]), nil
-}
-
-// --- Tail-call optimization (TCO) ---
-
-// evalTail evaluates a node in tail position. Returns either a value or a
-// tail-call continuation for the trampoline to execute.
-func (e *Evaluator) evalTail(node *Node) (Value, *tailContinuation, error) {
-	if node.Kind == NodeList {
-		return e.evalListTail(node)
-	}
-	// Literals, symbols, refs — no tail-call opportunity
-	val, err := e.Eval(node)
-	return val, nil, err
-}
-
-// evalListTail dispatches list evaluation in tail position.
-func (e *Evaluator) evalListTail(node *Node) (Value, *tailContinuation, error) {
-	if e.FuelSet {
-		if e.Fuel <= 0 {
-			return Value{}, nil, fmt.Errorf("fuel exhausted")
-		}
-		e.Fuel--
-	}
-	if len(node.Children) == 0 {
-		return Value{}, nil, fmt.Errorf("cannot eval empty list")
-	}
-
-	head := node.Children[0]
-
-	// Core forms with tail positions
-	if head.Kind == NodeSymbol {
-		switch head.Str {
-		case "if":
-			return e.evalIfTail(node)
-		case "let":
-			return e.evalLetTail(node)
-		case "letrec":
-			return e.evalLetrecTail(node)
-		case "do":
-			return e.evalDoTail(node)
-		// Non-tail core forms: delegate to regular eval
-		case "fn", "form", "quote", "apply", "sort-by":
-			val, err := e.evalList(node)
-			return val, nil, err
-		}
-	}
-
-	// Builtins
-	if head.Kind == NodeSymbol && e.Builtins != nil {
-		if fn, ok := e.Builtins[head.Str]; ok {
-			val, err := e.callBuiltin(fn, node.Children[1:])
-			return val, nil, err
-		}
-	}
-
-	// Evaluate head — should produce a function
-	headVal, err := e.Eval(head)
-	if err != nil {
-		if head.Kind == NodeSymbol {
-			return Value{}, nil, fmt.Errorf("unknown function: %s", head.Str)
-		}
-		return Value{}, nil, err
-	}
-	if headVal.Kind == ValFn {
-		// Tail call: return continuation instead of calling
-		args := make([]Value, len(node.Children)-1)
-		for i, argNode := range node.Children[1:] {
-			val, err := e.Eval(argNode)
-			if err != nil {
-				return Value{}, nil, err
-			}
-			args[i] = val
-		}
-		return Value{}, &tailContinuation{Fn: headVal.Fn, Args: args}, nil
-	}
-	if headVal.Kind == ValForm {
-		return e.callFormTail(headVal.Fn, node.Children[1:])
-	}
-
-	if head.Kind == NodeSymbol {
-		return Value{}, nil, fmt.Errorf("cannot call %s: not a function", head.Str)
-	}
-	return Value{}, nil, fmt.Errorf("cannot call %s value", headVal.KindName())
-}
-
-func (e *Evaluator) evalIfTail(node *Node) (Value, *tailContinuation, error) {
-	if len(node.Children) != 4 {
-		return Value{}, nil, fmt.Errorf("if: expected 3 args (cond then else), got %d", len(node.Children)-1)
-	}
-	cond, err := e.Eval(node.Children[1])
-	if err != nil {
-		return Value{}, nil, err
-	}
-	if cond.Truthy() {
-		return e.evalTail(node.Children[2])
-	}
-	return e.evalTail(node.Children[3])
-}
-
-func (e *Evaluator) evalLetTail(node *Node) (Value, *tailContinuation, error) {
-	if len(node.Children) != 3 {
-		return Value{}, nil, fmt.Errorf("let: expected bindings and body")
-	}
-	bindingsNode := node.Children[1]
-	if bindingsNode.Kind != NodeList {
-		return Value{}, nil, fmt.Errorf("let: bindings must be a list")
-	}
-	bindings := make(map[string]Value, len(bindingsNode.Children))
-	e.pushScope(bindings)
-	// No defer popScope — the trampoline handles scope cleanup via baseScope
-
-	for _, pair := range bindingsNode.Children {
-		if pair.Kind != NodeList || len(pair.Children) != 2 {
-			return Value{}, nil, fmt.Errorf("let: each binding must be (name expr)")
-		}
-		nameNode := pair.Children[0]
-		if nameNode.Kind != NodeSymbol {
-			return Value{}, nil, fmt.Errorf("let: binding name must be a symbol")
-		}
-		val, err := e.Eval(pair.Children[1])
-		if err != nil {
-			return Value{}, nil, err
-		}
-		bindings[nameNode.Str] = val
-	}
-	return e.evalTail(node.Children[2])
-}
-
-func (e *Evaluator) evalLetrecTail(node *Node) (Value, *tailContinuation, error) {
-	_, err := e.evalLetrecBindings(node)
-	if err != nil {
-		return Value{}, nil, err
-	}
-	// No defer popScope — the trampoline handles scope cleanup via baseScope
-	return e.evalTail(node.Children[2])
-}
-
-func (e *Evaluator) evalDoTail(node *Node) (Value, *tailContinuation, error) {
-	if len(node.Children) < 2 {
-		return Value{}, nil, fmt.Errorf("do: expected at least one expression")
-	}
-	// Evaluate all but the last expression normally
-	for _, child := range node.Children[1 : len(node.Children)-1] {
-		_, err := e.Eval(child)
-		if err != nil {
-			return Value{}, nil, err
-		}
-	}
-	// Last expression is in tail position
-	return e.evalTail(node.Children[len(node.Children)-1])
-}
-
-// evalApply: (apply fn list) — call fn with list elements as args.
-func (e *Evaluator) evalApply(node *Node) (Value, error) {
-	if len(node.Children) != 3 {
-		return Value{}, fmt.Errorf("apply: expected 2 args (fn list), got %d", len(node.Children)-1)
-	}
-	fnVal, err := e.Eval(node.Children[1])
-	if err != nil {
-		return Value{}, err
-	}
-	if fnVal.Kind == ValForm {
-		return Value{}, fmt.Errorf("apply: cannot apply a Form (forms receive unevaluated AST)")
-	}
-	if fnVal.Kind != ValFn {
-		return Value{}, fmt.Errorf("apply: first arg must be Fn, got %s", fnVal.KindName())
-	}
-	listVal, err := e.Eval(node.Children[2])
-	if err != nil {
-		return Value{}, err
-	}
-	if listVal.Kind != ValList {
-		return Value{}, fmt.Errorf("apply: second arg must be List, got %s", listVal.KindName())
-	}
-	return e.CallFnWithValues(fnVal.Fn, *listVal.List)
 }
 
 // evalSortBy: (sort-by fn list) or (sort-by fn :desc list) — sort list by key function.
@@ -696,7 +1046,6 @@ func (e *Evaluator) evalSortBy(node *Node) (Value, error) {
 		return Value{}, fmt.Errorf("sort-by: last arg must be List, got %s", listVal.KindName())
 	}
 	elems := *listVal.List
-	// Compute keys
 	type keyed struct {
 		val Value
 		key Value
@@ -709,7 +1058,6 @@ func (e *Evaluator) evalSortBy(node *Node) (Value, error) {
 		}
 		items[i] = keyed{val: elem, key: k}
 	}
-	// Sort
 	var sortErr error
 	sort.SliceStable(items, func(i, j int) bool {
 		if sortErr != nil {
@@ -766,7 +1114,6 @@ func nodeToValue(n *Node) Value {
 }
 
 // valueToNode converts a logos Value back to an AST node (inverse of nodeToValue).
-// Used by form expansion: the form body returns a Value, which becomes AST to evaluate.
 func valueToNode(v Value) (*Node, error) {
 	switch v.Kind {
 	case ValInt:
@@ -801,64 +1148,7 @@ func valueToNode(v Value) (*Node, error) {
 	}
 }
 
-// callForm calls a form value with unevaluated AST args.
-func (e *Evaluator) callForm(form *FnValue, argNodes []*Node) (Value, error) {
-	if form.RestParam != "" {
-		if len(argNodes) < len(form.Params) {
-			return Value{}, fmt.Errorf("form: expected at least %d args, got %d", len(form.Params), len(argNodes))
-		}
-	} else {
-		if len(argNodes) != len(form.Params) {
-			return Value{}, fmt.Errorf("form: expected %d args, got %d", len(form.Params), len(argNodes))
-		}
-	}
-	// Convert each arg AST to a Value (not evaluated)
-	args := make([]Value, len(argNodes))
-	for i, argNode := range argNodes {
-		args[i] = nodeToValue(argNode)
-	}
-	// Evaluate form body to produce expansion
-	expansion, err := e.CallFnWithValues(form, args)
-	if err != nil {
-		return Value{}, err
-	}
-	// Convert expansion back to AST
-	expansionNode, err := valueToNode(expansion)
-	if err != nil {
-		return Value{}, fmt.Errorf("form expansion: %w", err)
-	}
-	// Evaluate the expansion in the caller's scope
-	return e.Eval(expansionNode)
-}
-
-// callFormTail calls a form value in tail position.
-func (e *Evaluator) callFormTail(form *FnValue, argNodes []*Node) (Value, *tailContinuation, error) {
-	if form.RestParam != "" {
-		if len(argNodes) < len(form.Params) {
-			return Value{}, nil, fmt.Errorf("form: expected at least %d args, got %d", len(form.Params), len(argNodes))
-		}
-	} else {
-		if len(argNodes) != len(form.Params) {
-			return Value{}, nil, fmt.Errorf("form: expected %d args, got %d", len(form.Params), len(argNodes))
-		}
-	}
-	args := make([]Value, len(argNodes))
-	for i, argNode := range argNodes {
-		args[i] = nodeToValue(argNode)
-	}
-	expansion, err := e.CallFnWithValues(form, args)
-	if err != nil {
-		return Value{}, nil, err
-	}
-	expansionNode, err := valueToNode(expansion)
-	if err != nil {
-		return Value{}, nil, fmt.Errorf("form expansion: %w", err)
-	}
-	return e.evalTail(expansionNode)
-}
-
-// builtinAssert: (assert condition message) — returns true if condition is truthy,
-// otherwise returns an AssertError with the message and current node ID.
+// builtinAssert: (assert condition message)
 func (e *Evaluator) builtinAssert(args []Value) (Value, error) {
 	if len(args) != 2 {
 		return Value{}, fmt.Errorf("assert: expected 2 args (condition message), got %d", len(args))
@@ -984,8 +1274,6 @@ func builtinRest(args []Value) (Value, error) {
 	return ListVal(elems[1:]), nil
 }
 
-
-
 func builtinLen(args []Value) (Value, error) {
 	if len(args) != 1 {
 		return Value{}, fmt.Errorf("len: expected 1 arg, got %d", len(args))
@@ -1026,8 +1314,6 @@ func builtinEq(args []Value) (Value, error) {
 	}
 	return BoolVal(ValuesEqual(args[0], args[1])), nil
 }
-
-
 
 func builtinToString(args []Value) (Value, error) {
 	if len(args) != 1 {
@@ -1086,7 +1372,6 @@ func builtinType(args []Value) (Value, error) {
 
 // --- Arithmetic ---
 
-// numericArgs extracts two numeric args, promoting to float if mixed.
 func numericArgs(name string, args []Value) (int64, int64, float64, float64, bool, error) {
 	if len(args) != 2 {
 		return 0, 0, 0, 0, false, fmt.Errorf("%s: expected 2 args, got %d", name, len(args))
@@ -1180,8 +1465,6 @@ func builtinMod(args []Value) (Value, error) {
 
 // --- Comparison ---
 
-
-
 func typeRank(k ValueKind) int {
 	switch k {
 	case ValNil:
@@ -1214,7 +1497,6 @@ func typeRank(k ValueKind) int {
 }
 
 func compareTwo(a, b Value) (int, error) {
-	// Numeric promotion: int and float are cross-comparable
 	if (a.Kind == ValInt || a.Kind == ValFloat) && (b.Kind == ValInt || b.Kind == ValFloat) {
 		var fa, fb float64
 		if a.Kind == ValInt {
@@ -1235,7 +1517,6 @@ func compareTwo(a, b Value) (int, error) {
 		}
 		return 0, nil
 	}
-	// Different types: compare by rank
 	ra, rb := typeRank(a.Kind), typeRank(b.Kind)
 	if ra != rb {
 		if ra < rb {
@@ -1243,7 +1524,6 @@ func compareTwo(a, b Value) (int, error) {
 		}
 		return 1, nil
 	}
-	// Same type
 	switch a.Kind {
 	case ValNil:
 		return 0, nil
@@ -1252,7 +1532,7 @@ func compareTwo(a, b Value) (int, error) {
 			return 0, nil
 		}
 		if !a.Bool {
-			return -1, nil // false < true
+			return -1, nil
 		}
 		return 1, nil
 	case ValString, ValKeyword, ValSymbol, ValNodeRef:
@@ -1283,7 +1563,6 @@ func compareTwo(a, b Value) (int, error) {
 		return 0, nil
 	case ValMap:
 		am, bm := *a.Map, *b.Map
-		// Collect and sort keys from both maps
 		keySet := make(map[string]bool)
 		for k := range am {
 			keySet[k] = true
@@ -1349,8 +1628,6 @@ func builtinGt(args []Value) (Value, error) {
 	}
 	return BoolVal(cmp > 0), nil
 }
-
-
 
 // --- List ---
 
