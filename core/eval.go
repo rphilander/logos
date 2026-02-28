@@ -80,7 +80,8 @@ type frame struct {
 	argNodes []*Node
 
 	// frameBuiltinArg
-	builtin  Builtin
+	builtin     Builtin
+	builtinName string
 	builtinDone []Value
 	builtinArgs []*Node
 	builtinIdx  int
@@ -101,6 +102,7 @@ type frame struct {
 	bindNames    []string // letrec only: ordered names for back-patching
 	bindIdx      int
 	bodyNode     *Node
+	scopeIdx     int      // index into e.locals where bindings map lives
 
 	// frameDo
 	doExprs []*Node
@@ -113,6 +115,18 @@ type frame struct {
 
 	// frameApplyList
 	applyFn *FnValue
+}
+
+// evalState holds the loop variables for one eval loop iteration.
+// Evaluator fields (locals, currentNodeID, fuel) stay on *Evaluator.
+type evalState struct {
+	node       *Node
+	evaluating bool
+	tail       bool
+	result     Value
+	stack      []frame
+	err        error // set on eval error
+	done       bool  // set when stack empty + result ready
 }
 
 // Eval evaluates a single AST node.
@@ -181,656 +195,641 @@ func (e *Evaluator) evalLoopWith(startNode *Node, stack []frame, startTail bool)
 	savedLocalsLen := len(e.locals)
 	savedNodeID := e.currentNodeID
 
-	node := startNode
-	evaluating := true
-	tail := startTail // tracks whether current node is in tail position
-	var result Value
+	es := &evalState{
+		node:       startNode,
+		evaluating: true,
+		tail:       startTail,
+		stack:      stack,
+	}
 
 	for {
-		if evaluating {
-			// --- Eval phase: process node ---
-			if e.FuelSet {
-				if e.Fuel <= 0 {
-					e.locals = e.locals[:savedLocalsLen]
-					e.currentNodeID = savedNodeID
-					return Value{}, fmt.Errorf("fuel exhausted")
-				}
-				e.Fuel--
-			}
-
-			switch node.Kind {
-			case NodeInt:
-				result = IntVal(node.Int)
-				evaluating = false
-			case NodeFloat:
-				result = FloatVal(node.Float)
-				evaluating = false
-			case NodeBool:
-				result = BoolVal(node.Bool)
-				evaluating = false
-			case NodeString:
-				result = StringVal(node.Str)
-				evaluating = false
-			case NodeNil:
-				result = NilVal()
-				evaluating = false
-			case NodeKeyword:
-				result = KeywordVal(node.Str)
-				evaluating = false
-			case NodeSymbol:
-				val, err := e.resolveSymbol(node.Str)
-				if err != nil {
-					e.locals = e.locals[:savedLocalsLen]
-					e.currentNodeID = savedNodeID
-					return Value{}, err
-				}
-				result = val
-				evaluating = false
-			case NodeRef:
-				// Push frameRef, then evaluate the referenced node's expression
-				if e.ResolveNode == nil {
-					e.locals = e.locals[:savedLocalsLen]
-					e.currentNodeID = savedNodeID
-					return Value{}, fmt.Errorf("cannot resolve node ref %s: no node resolver", node.Ref)
-				}
-				expr, err := e.ResolveNode(node.Ref)
-				if err != nil {
-					e.locals = e.locals[:savedLocalsLen]
-					e.currentNodeID = savedNodeID
-					return Value{}, err
-				}
-				stack = append(stack, frame{
-					kind:      frameRef,
-					refNodeID: node.Ref,
-					savedNodeID: e.currentNodeID,
-				})
-				e.currentNodeID = node.Ref
-				node = expr
-				tail = false // ref content evaluation is not in tail position
-			case NodeList:
-				if len(node.Children) == 0 {
-					e.locals = e.locals[:savedLocalsLen]
-					e.currentNodeID = savedNodeID
-					return Value{}, fmt.Errorf("cannot eval empty list")
-				}
-
-				head := node.Children[0]
-				// tail is the loop variable — tracks whether this list is in tail position
-
-				// Core forms (symbol head)
-				if head.Kind == NodeSymbol {
-					switch head.Str {
-					case "if":
-						if len(node.Children) != 4 {
-							e.locals = e.locals[:savedLocalsLen]
-							e.currentNodeID = savedNodeID
-							return Value{}, fmt.Errorf("if: expected 3 args (cond then else), got %d", len(node.Children)-1)
-						}
-						stack = append(stack, frame{
-							kind:     frameIfCond,
-							tail:     tail,
-							thenNode: node.Children[2],
-							elseNode: node.Children[3],
-						})
-						node = node.Children[1]
-						tail = false // condition is not in tail position
-						continue
-
-					case "let":
-						if len(node.Children) != 3 {
-							e.locals = e.locals[:savedLocalsLen]
-							e.currentNodeID = savedNodeID
-							return Value{}, fmt.Errorf("let: expected bindings and body")
-						}
-						bindingsNode := node.Children[1]
-						if bindingsNode.Kind != NodeList {
-							e.locals = e.locals[:savedLocalsLen]
-							e.currentNodeID = savedNodeID
-							return Value{}, fmt.Errorf("let: bindings must be a list")
-						}
-						bindings := make(map[string]Value, len(bindingsNode.Children))
-						e.pushScope(bindings)
-						if len(bindingsNode.Children) == 0 {
-							// No bindings — eval body directly
-							if !tail {
-								stack = append(stack, frame{kind: frameScopeCleanup})
-							}
-							node = node.Children[2]
-							continue
-						}
-						// Validate first pair
-						pair := bindingsNode.Children[0]
-						if pair.Kind != NodeList || len(pair.Children) != 2 {
-							e.locals = e.locals[:savedLocalsLen]
-							e.currentNodeID = savedNodeID
-							return Value{}, fmt.Errorf("let: each binding must be (name expr)")
-						}
-						if pair.Children[0].Kind != NodeSymbol {
-							e.locals = e.locals[:savedLocalsLen]
-							e.currentNodeID = savedNodeID
-							return Value{}, fmt.Errorf("let: binding name must be a symbol")
-						}
-						stack = append(stack, frame{
-							kind:      frameLetBind,
-							tail:      tail,
-							bindings:  bindings,
-							bindPairs: bindingsNode.Children,
-							bindIdx:   0,
-							bodyNode:  node.Children[2],
-						})
-						node = pair.Children[1]
-						tail = false // binding expressions are not in tail position
-						continue
-
-					case "letrec":
-						if len(node.Children) != 3 {
-							e.locals = e.locals[:savedLocalsLen]
-							e.currentNodeID = savedNodeID
-							return Value{}, fmt.Errorf("letrec: expected bindings and body")
-						}
-						bindingsNode := node.Children[1]
-						if bindingsNode.Kind != NodeList {
-							e.locals = e.locals[:savedLocalsLen]
-							e.currentNodeID = savedNodeID
-							return Value{}, fmt.Errorf("letrec: bindings must be a list")
-						}
-						// Collect names and validate
-						names := make([]string, len(bindingsNode.Children))
-						for i, pair := range bindingsNode.Children {
-							if pair.Kind != NodeList || len(pair.Children) != 2 {
-								e.locals = e.locals[:savedLocalsLen]
-								e.currentNodeID = savedNodeID
-								return Value{}, fmt.Errorf("letrec: each binding must be (name expr)")
-							}
-							if pair.Children[0].Kind != NodeSymbol {
-								e.locals = e.locals[:savedLocalsLen]
-								e.currentNodeID = savedNodeID
-								return Value{}, fmt.Errorf("letrec: binding name must be a symbol")
-							}
-							names[i] = pair.Children[0].Str
-						}
-						scope := make(map[string]Value, len(names))
-						e.pushScope(scope)
-						if len(bindingsNode.Children) == 0 {
-							if !tail {
-								stack = append(stack, frame{kind: frameScopeCleanup})
-							}
-							node = node.Children[2]
-							continue
-						}
-						stack = append(stack, frame{
-							kind:      frameLetrecBind,
-							tail:      tail,
-							bindings:  scope,
-							bindPairs: bindingsNode.Children,
-							bindNames: names,
-							bindIdx:   0,
-							bodyNode:  node.Children[2],
-						})
-						node = bindingsNode.Children[0].Children[1]
-						tail = false // binding expressions are not in tail position
-						continue
-
-					case "do":
-						if len(node.Children) < 2 {
-							e.locals = e.locals[:savedLocalsLen]
-							e.currentNodeID = savedNodeID
-							return Value{}, fmt.Errorf("do: expected at least one expression")
-						}
-						exprs := node.Children[1:]
-						if len(exprs) == 1 {
-							// Single expression: just eval it (inherit tail)
-							node = exprs[0]
-							continue
-						}
-						stack = append(stack, frame{
-							kind:    frameDo,
-							tail:    tail,
-							doExprs: exprs,
-							doIdx:   0,
-						})
-						node = exprs[0]
-						tail = false // non-last do expressions are not in tail position
-						continue
-
-					case "fn":
-						val, err := e.evalFn(node)
-						if err != nil {
-							e.locals = e.locals[:savedLocalsLen]
-							e.currentNodeID = savedNodeID
-							return Value{}, err
-						}
-						result = val
-						evaluating = false
-						continue
-
-					case "form":
-						val, err := e.evalForm(node)
-						if err != nil {
-							e.locals = e.locals[:savedLocalsLen]
-							e.currentNodeID = savedNodeID
-							return Value{}, err
-						}
-						result = val
-						evaluating = false
-						continue
-
-					case "quote":
-						val, err := e.evalQuote(node)
-						if err != nil {
-							e.locals = e.locals[:savedLocalsLen]
-							e.currentNodeID = savedNodeID
-							return Value{}, err
-						}
-						result = val
-						evaluating = false
-						continue
-
-					case "apply":
-						if len(node.Children) != 3 {
-							e.locals = e.locals[:savedLocalsLen]
-							e.currentNodeID = savedNodeID
-							return Value{}, fmt.Errorf("apply: expected 2 args (fn list), got %d", len(node.Children)-1)
-						}
-						stack = append(stack, frame{
-							kind:          frameApplyFn,
-							tail:          tail,
-							applyListNode: node.Children[2],
-						})
-						node = node.Children[1]
-						tail = false // apply args are not in tail position
-						continue
-
-					case "sort-by":
-						// sort-by stays as a leaf operation (calls CallFnWithValues internally)
-						val, err := e.evalSortBy(node)
-						if err != nil {
-							e.locals = e.locals[:savedLocalsLen]
-							e.currentNodeID = savedNodeID
-							return Value{}, err
-						}
-						result = val
-						evaluating = false
-						continue
-					}
-				}
-
-				// Builtins (symbol head, not a core form)
-				if head.Kind == NodeSymbol && e.Builtins != nil {
-					if fn, ok := e.Builtins[head.Str]; ok {
-						argNodes := node.Children[1:]
-						if len(argNodes) == 0 {
-							val, err := fn(nil)
-							if err != nil {
-								e.locals = e.locals[:savedLocalsLen]
-								e.currentNodeID = savedNodeID
-								return Value{}, err
-							}
-							result = val
-							evaluating = false
-							continue
-						}
-						stack = append(stack, frame{
-							kind:        frameBuiltinArg,
-							builtin:     fn,
-							builtinDone: make([]Value, 0, len(argNodes)),
-							builtinArgs: argNodes,
-							builtinIdx:  0,
-						})
-						node = argNodes[0]
-						tail = false // args are not in tail position
-						continue
-					}
-				}
-
-				// Computed head — evaluate it, then dispatch
-				stack = append(stack, frame{
-					kind:     frameEvalHead,
-					tail:     tail,
-					headNode: head,
-					argNodes: node.Children[1:],
-				})
-				node = head
-				tail = false // evaluating the head position is not tail
-				continue
-
-			default:
-				e.locals = e.locals[:savedLocalsLen]
-				e.currentNodeID = savedNodeID
-				return Value{}, fmt.Errorf("unknown node kind: %d", node.Kind)
-			}
-		}
-
-		// --- Value phase: we have `result`, process top frame ---
-		if len(stack) == 0 {
-			return result, nil
-		}
-
-		f := &stack[len(stack)-1]
-
-		switch f.kind {
-		case frameFnBody:
-			// Function body completed. Restore scope and currentNodeID.
-			e.locals = e.locals[:f.scopeBase]
-			e.currentNodeID = f.savedNodeID
-			stack = stack[:len(stack)-1]
-			// result passes through
-
-		case frameScopeCleanup:
-			e.popScope()
-			stack = stack[:len(stack)-1]
-			// result passes through
-
-		case frameRef:
-			e.currentNodeID = f.savedNodeID
-			if result.Kind == ValFn || result.Kind == ValForm {
-				result.Fn.NodeID = f.refNodeID
-			}
-			stack = stack[:len(stack)-1]
-			// result passes through
-
-		case frameEvalHead:
-			headNode := f.headNode
-			argNodes := f.argNodes
-			frameTail := f.tail
-			stack = stack[:len(stack)-1]
-
-			if result.Kind == ValFn {
-				// User-defined fn: evaluate args
-				fn := result.Fn
-				if fn.RestParam != "" {
-					if len(argNodes) < len(fn.Params) {
-						e.locals = e.locals[:savedLocalsLen]
-						e.currentNodeID = savedNodeID
-						return Value{}, fmt.Errorf("fn: expected at least %d args, got %d", len(fn.Params), len(argNodes))
-					}
-				} else {
-					if len(argNodes) != len(fn.Params) {
-						e.locals = e.locals[:savedLocalsLen]
-						e.currentNodeID = savedNodeID
-						return Value{}, fmt.Errorf("fn: expected %d args, got %d", len(fn.Params), len(argNodes))
-					}
-				}
-				if len(argNodes) == 0 {
-					// No args to evaluate — enter fn body directly
-					node = e.enterFnBody(fn, nil, frameTail, &stack)
-					tail = true // fn body is always in tail position
-					evaluating = true
-					continue
-				}
-				stack = append(stack, frame{
-					kind:   frameFnArg,
-					tail:   frameTail,
-					fn:     fn,
-					fnDone: make([]Value, 0, len(argNodes)),
-					fnArgs: argNodes,
-					fnIdx:  0,
-				})
-				node = argNodes[0]
-				tail = false // args are not in tail position
-				evaluating = true
-				continue
-			}
-			if result.Kind == ValForm {
-				formFn := result.Fn
-				// Handle form call
-				n, err := e.handleFormCall(formFn, argNodes, frameTail, &stack)
-				if err != nil {
-					e.locals = e.locals[:savedLocalsLen]
-					e.currentNodeID = savedNodeID
-					return Value{}, err
-				}
-				node = n
-				tail = frameTail // form expansion inherits tail from the form call site
-				evaluating = true
-				continue
-			}
-			if result.Kind == ValBuiltin {
-				// Builtin resolved via computed head — evaluate args then call
-				builtinFn := result.BuiltinFunc
-				if len(argNodes) == 0 {
-					val, err := builtinFn(nil)
-					if err != nil {
-						e.locals = e.locals[:savedLocalsLen]
-						e.currentNodeID = savedNodeID
-						return Value{}, err
-					}
-					result = val
-					continue
-				}
-				stack = append(stack, frame{
-					kind:        frameBuiltinArg,
-					builtin:     builtinFn,
-					builtinDone: make([]Value, 0, len(argNodes)),
-					builtinArgs: argNodes,
-					builtinIdx:  0,
-				})
-				node = argNodes[0]
-				tail = false // args are not in tail position
-				evaluating = true
-				continue
-			}
-			if headNode.Kind == NodeSymbol {
-				e.locals = e.locals[:savedLocalsLen]
-				e.currentNodeID = savedNodeID
-				return Value{}, fmt.Errorf("cannot call %s: not a function", headNode.Str)
-			}
+		e.evalStep(es)
+		if es.err != nil {
 			e.locals = e.locals[:savedLocalsLen]
 			e.currentNodeID = savedNodeID
-			return Value{}, fmt.Errorf("cannot call %s value", result.KindName())
+			return Value{}, es.err
+		}
+		if es.done {
+			return es.result, nil
+		}
+	}
+}
 
-		case frameBuiltinArg:
-			f.builtinDone = append(f.builtinDone, result)
-			f.builtinIdx++
-			if f.builtinIdx < len(f.builtinArgs) {
-				node = f.builtinArgs[f.builtinIdx]
-				evaluating = true
-				continue
+// evalStep runs exactly one iteration of the eval loop.
+// It modifies es in place. On error, es.err is set. On completion, es.done is set.
+// Caller is responsible for cleanup (locals, currentNodeID) on error.
+func (e *Evaluator) evalStep(es *evalState) {
+	if es.evaluating {
+		// --- Eval phase: process node ---
+		if e.FuelSet {
+			if e.Fuel <= 0 {
+				es.err = fmt.Errorf("fuel exhausted")
+				return
 			}
-			// All args evaluated — call builtin
-			fn := f.builtin
-			args := f.builtinDone
-			stack = stack[:len(stack)-1]
-			val, err := fn(args)
+			e.Fuel--
+		}
+
+		switch es.node.Kind {
+		case NodeInt:
+			es.result = IntVal(es.node.Int)
+			es.evaluating = false
+			return
+		case NodeFloat:
+			es.result = FloatVal(es.node.Float)
+			es.evaluating = false
+			return
+		case NodeBool:
+			es.result = BoolVal(es.node.Bool)
+			es.evaluating = false
+			return
+		case NodeString:
+			es.result = StringVal(es.node.Str)
+			es.evaluating = false
+			return
+		case NodeNil:
+			es.result = NilVal()
+			es.evaluating = false
+			return
+		case NodeKeyword:
+			es.result = KeywordVal(es.node.Str)
+			es.evaluating = false
+			return
+		case NodeSymbol:
+			val, err := e.resolveSymbol(es.node.Str)
 			if err != nil {
-				e.locals = e.locals[:savedLocalsLen]
-				e.currentNodeID = savedNodeID
-				return Value{}, err
+				es.err = err
+				return
 			}
-			result = val
-
-		case frameFnArg:
-			f.fnDone = append(f.fnDone, result)
-			f.fnIdx++
-			if f.fnIdx < len(f.fnArgs) {
-				node = f.fnArgs[f.fnIdx]
-				tail = false // args are not in tail position
-				evaluating = true
-				continue
+			es.result = val
+			es.evaluating = false
+			return
+		case NodeRef:
+			// Push frameRef, then evaluate the referenced node's expression
+			if e.ResolveNode == nil {
+				es.err = fmt.Errorf("cannot resolve node ref %s: no node resolver", es.node.Ref)
+				return
 			}
-			// All args evaluated — enter fn body
-			fn := f.fn
-			args := f.fnDone
-			frameTail := f.tail
-			stack = stack[:len(stack)-1]
-			node = e.enterFnBody(fn, args, frameTail, &stack)
-			tail = true // fn body is always in tail position
-			evaluating = true
-			continue
+			expr, err := e.ResolveNode(es.node.Ref)
+			if err != nil {
+				es.err = err
+				return
+			}
+			es.stack = append(es.stack, frame{
+				kind:        frameRef,
+				refNodeID:   es.node.Ref,
+				savedNodeID: e.currentNodeID,
+			})
+			e.currentNodeID = es.node.Ref
+			es.node = expr
+			es.tail = false
+			return
+		case NodeList:
+			if len(es.node.Children) == 0 {
+				es.err = fmt.Errorf("cannot eval empty list")
+				return
+			}
 
-		case frameIfCond:
-			thenNode := f.thenNode
-			elseNode := f.elseNode
-			frameTail := f.tail
-			stack = stack[:len(stack)-1]
-			if result.Truthy() {
-				node = thenNode
+			head := es.node.Children[0]
+
+			// Core forms (symbol head)
+			if head.Kind == NodeSymbol {
+				switch head.Str {
+				case "if":
+					if len(es.node.Children) != 4 {
+						es.err = fmt.Errorf("if: expected 3 args (cond then else), got %d", len(es.node.Children)-1)
+						return
+					}
+					es.stack = append(es.stack, frame{
+						kind:     frameIfCond,
+						tail:     es.tail,
+						thenNode: es.node.Children[2],
+						elseNode: es.node.Children[3],
+					})
+					es.node = es.node.Children[1]
+					es.tail = false
+					return
+
+				case "let":
+					if len(es.node.Children) != 3 {
+						es.err = fmt.Errorf("let: expected bindings and body")
+						return
+					}
+					bindingsNode := es.node.Children[1]
+					if bindingsNode.Kind != NodeList {
+						es.err = fmt.Errorf("let: bindings must be a list")
+						return
+					}
+					bindings := make(map[string]Value, len(bindingsNode.Children))
+					e.pushScope(bindings)
+					if len(bindingsNode.Children) == 0 {
+						if !es.tail {
+							es.stack = append(es.stack, frame{kind: frameScopeCleanup})
+						}
+						es.node = es.node.Children[2]
+						return
+					}
+					pair := bindingsNode.Children[0]
+					if pair.Kind != NodeList || len(pair.Children) != 2 {
+						es.err = fmt.Errorf("let: each binding must be (name expr)")
+						return
+					}
+					if pair.Children[0].Kind != NodeSymbol {
+						es.err = fmt.Errorf("let: binding name must be a symbol")
+						return
+					}
+					es.stack = append(es.stack, frame{
+						kind:      frameLetBind,
+						tail:      es.tail,
+						bindings:  bindings,
+						bindPairs: bindingsNode.Children,
+						bindIdx:   0,
+						bodyNode:  es.node.Children[2],
+						scopeIdx:  len(e.locals) - 1,
+					})
+					es.node = pair.Children[1]
+					es.tail = false
+					return
+
+				case "letrec":
+					if len(es.node.Children) != 3 {
+						es.err = fmt.Errorf("letrec: expected bindings and body")
+						return
+					}
+					bindingsNode := es.node.Children[1]
+					if bindingsNode.Kind != NodeList {
+						es.err = fmt.Errorf("letrec: bindings must be a list")
+						return
+					}
+					names := make([]string, len(bindingsNode.Children))
+					for i, pair := range bindingsNode.Children {
+						if pair.Kind != NodeList || len(pair.Children) != 2 {
+							es.err = fmt.Errorf("letrec: each binding must be (name expr)")
+							return
+						}
+						if pair.Children[0].Kind != NodeSymbol {
+							es.err = fmt.Errorf("letrec: binding name must be a symbol")
+							return
+						}
+						names[i] = pair.Children[0].Str
+					}
+					scope := make(map[string]Value, len(names))
+					e.pushScope(scope)
+					if len(bindingsNode.Children) == 0 {
+						if !es.tail {
+							es.stack = append(es.stack, frame{kind: frameScopeCleanup})
+						}
+						es.node = es.node.Children[2]
+						return
+					}
+					es.stack = append(es.stack, frame{
+						kind:      frameLetrecBind,
+						tail:      es.tail,
+						bindings:  scope,
+						bindPairs: bindingsNode.Children,
+						bindNames: names,
+						bindIdx:   0,
+						bodyNode:  es.node.Children[2],
+						scopeIdx:  len(e.locals) - 1,
+					})
+					es.node = bindingsNode.Children[0].Children[1]
+					es.tail = false
+					return
+
+				case "do":
+					if len(es.node.Children) < 2 {
+						es.err = fmt.Errorf("do: expected at least one expression")
+						return
+					}
+					exprs := es.node.Children[1:]
+					if len(exprs) == 1 {
+						es.node = exprs[0]
+						return
+					}
+					es.stack = append(es.stack, frame{
+						kind:    frameDo,
+						tail:    es.tail,
+						doExprs: exprs,
+						doIdx:   0,
+					})
+					es.node = exprs[0]
+					es.tail = false
+					return
+
+				case "fn":
+					val, err := e.evalFn(es.node)
+					if err != nil {
+						es.err = err
+						return
+					}
+					es.result = val
+					es.evaluating = false
+					return
+
+				case "form":
+					val, err := e.evalForm(es.node)
+					if err != nil {
+						es.err = err
+						return
+					}
+					es.result = val
+					es.evaluating = false
+					return
+
+				case "quote":
+					val, err := e.evalQuote(es.node)
+					if err != nil {
+						es.err = err
+						return
+					}
+					es.result = val
+					es.evaluating = false
+					return
+
+				case "apply":
+					if len(es.node.Children) != 3 {
+						es.err = fmt.Errorf("apply: expected 2 args (fn list), got %d", len(es.node.Children)-1)
+						return
+					}
+					es.stack = append(es.stack, frame{
+						kind:          frameApplyFn,
+						tail:          es.tail,
+						applyListNode: es.node.Children[2],
+					})
+					es.node = es.node.Children[1]
+					es.tail = false
+					return
+
+				case "sort-by":
+					val, err := e.evalSortBy(es.node)
+					if err != nil {
+						es.err = err
+						return
+					}
+					es.result = val
+					es.evaluating = false
+					return
+				}
+			}
+
+			// Builtins (symbol head, not a core form)
+			if head.Kind == NodeSymbol && e.Builtins != nil {
+				if fn, ok := e.Builtins[head.Str]; ok {
+					argNodes := es.node.Children[1:]
+					if len(argNodes) == 0 {
+						val, err := fn(nil)
+						if err != nil {
+							es.err = err
+							return
+						}
+						es.result = val
+						es.evaluating = false
+						return
+					}
+					es.stack = append(es.stack, frame{
+						kind:        frameBuiltinArg,
+						builtin:     fn,
+						builtinName: head.Str,
+						builtinDone: make([]Value, 0, len(argNodes)),
+						builtinArgs: argNodes,
+						builtinIdx:  0,
+					})
+					es.node = argNodes[0]
+					es.tail = false
+					return
+				}
+			}
+
+			// Computed head — evaluate it, then dispatch
+			es.stack = append(es.stack, frame{
+				kind:     frameEvalHead,
+				tail:     es.tail,
+				headNode: head,
+				argNodes: es.node.Children[1:],
+			})
+			es.node = head
+			es.tail = false
+			return
+
+		default:
+			es.err = fmt.Errorf("unknown node kind: %d", es.node.Kind)
+			return
+		}
+	}
+
+	// --- Value phase: we have `es.result`, process top frame ---
+	if len(es.stack) == 0 {
+		es.done = true
+		return
+	}
+
+	f := &es.stack[len(es.stack)-1]
+
+	switch f.kind {
+	case frameFnBody:
+		e.locals = e.locals[:f.scopeBase]
+		e.currentNodeID = f.savedNodeID
+		es.stack = es.stack[:len(es.stack)-1]
+
+	case frameScopeCleanup:
+		e.popScope()
+		es.stack = es.stack[:len(es.stack)-1]
+
+	case frameRef:
+		e.currentNodeID = f.savedNodeID
+		if es.result.Kind == ValFn || es.result.Kind == ValForm {
+			es.result.Fn.NodeID = f.refNodeID
+		}
+		es.stack = es.stack[:len(es.stack)-1]
+
+	case frameEvalHead:
+		headNode := f.headNode
+		argNodes := f.argNodes
+		frameTail := f.tail
+		es.stack = es.stack[:len(es.stack)-1]
+
+		if es.result.Kind == ValFn {
+			fn := es.result.Fn
+			if fn.RestParam != "" {
+				if len(argNodes) < len(fn.Params) {
+					es.err = fmt.Errorf("fn: expected at least %d args, got %d", len(fn.Params), len(argNodes))
+					return
+				}
 			} else {
-				node = elseNode
-			}
-			tail = frameTail // branches inherit tail from the if expression
-			evaluating = true
-			continue
-
-		case frameLetBind:
-			// Store binding value
-			nameStr := f.bindPairs[f.bindIdx].Children[0].Str
-			f.bindings[nameStr] = result
-			f.bindIdx++
-			if f.bindIdx < len(f.bindPairs) {
-				// Validate next pair
-				pair := f.bindPairs[f.bindIdx]
-				if pair.Kind != NodeList || len(pair.Children) != 2 {
-					e.locals = e.locals[:savedLocalsLen]
-					e.currentNodeID = savedNodeID
-					return Value{}, fmt.Errorf("let: each binding must be (name expr)")
-				}
-				if pair.Children[0].Kind != NodeSymbol {
-					e.locals = e.locals[:savedLocalsLen]
-					e.currentNodeID = savedNodeID
-					return Value{}, fmt.Errorf("let: binding name must be a symbol")
-				}
-				node = pair.Children[1]
-				tail = false // binding expressions are not in tail position
-				evaluating = true
-				continue
-			}
-			// All bindings done — eval body
-			bodyNode := f.bodyNode
-			frameTail := f.tail
-			stack = stack[:len(stack)-1]
-			if !frameTail {
-				stack = append(stack, frame{kind: frameScopeCleanup})
-			}
-			node = bodyNode
-			tail = frameTail // body inherits tail from the let expression
-			evaluating = true
-			continue
-
-		case frameLetrecBind:
-			// Store binding value
-			f.bindings[f.bindNames[f.bindIdx]] = result
-			f.bindIdx++
-			if f.bindIdx < len(f.bindPairs) {
-				node = f.bindPairs[f.bindIdx].Children[1]
-				tail = false // binding expressions are not in tail position
-				evaluating = true
-				continue
-			}
-			// All bindings done — back-patch closures, eval body
-			for _, val := range f.bindings {
-				if (val.Kind == ValFn || val.Kind == ValForm) && val.Fn != nil {
-					if val.Fn.Closure == nil {
-						val.Fn.Closure = make(map[string]Value, len(f.bindNames))
-					}
-					for _, name := range f.bindNames {
-						val.Fn.Closure[name] = f.bindings[name]
-					}
+				if len(argNodes) != len(fn.Params) {
+					es.err = fmt.Errorf("fn: expected %d args, got %d", len(fn.Params), len(argNodes))
+					return
 				}
 			}
-			bodyNode := f.bodyNode
-			frameTail := f.tail
-			stack = stack[:len(stack)-1]
-			if !frameTail {
-				stack = append(stack, frame{kind: frameScopeCleanup})
+			if len(argNodes) == 0 {
+				es.node = e.enterFnBody(fn, nil, frameTail, &es.stack)
+				es.tail = true
+				es.evaluating = true
+				return
 			}
-			node = bodyNode
-			tail = frameTail // body inherits tail from the letrec expression
-			evaluating = true
-			continue
-
-		case frameDo:
-			f.doIdx++
-			if f.doIdx < len(f.doExprs)-1 {
-				// Not the last expression — discard result, eval next
-				node = f.doExprs[f.doIdx]
-				tail = false // non-last do expressions are not in tail position
-				evaluating = true
-				continue
-			}
-			if f.doIdx == len(f.doExprs)-1 {
-				// Last expression — inherit tail
-				frameTail := f.tail
-				node = f.doExprs[f.doIdx]
-				tail = frameTail // last do expression inherits tail
-				stack = stack[:len(stack)-1]
-				evaluating = true
-				continue
-			}
-			// Past last (shouldn't happen)
-			stack = stack[:len(stack)-1]
-
-		case frameFormExpand:
-			frameTail := f.tail
-			stack = stack[:len(stack)-1]
-			// result is the expansion value — convert to AST and eval
-			expansionNode, err := valueToNode(result)
+			es.stack = append(es.stack, frame{
+				kind:   frameFnArg,
+				tail:   frameTail,
+				fn:     fn,
+				fnDone: make([]Value, 0, len(argNodes)),
+				fnArgs: argNodes,
+				fnIdx:  0,
+			})
+			es.node = argNodes[0]
+			es.tail = false
+			es.evaluating = true
+			return
+		}
+		if es.result.Kind == ValForm {
+			formFn := es.result.Fn
+			n, err := e.handleFormCall(formFn, argNodes, frameTail, &es.stack)
 			if err != nil {
-				e.locals = e.locals[:savedLocalsLen]
-				e.currentNodeID = savedNodeID
-				return Value{}, fmt.Errorf("form expansion: %w", err)
+				es.err = err
+				return
 			}
-			node = expansionNode
-			tail = frameTail // expansion eval inherits tail from the form call
-			evaluating = true
-			continue
+			es.node = n
+			es.tail = frameTail
+			es.evaluating = true
+			return
+		}
+		if es.result.Kind == ValBuiltin {
+			builtinFn := es.result.BuiltinFunc
+			builtinName := es.result.BuiltinName
+			if len(argNodes) == 0 {
+				val, err := builtinFn(nil)
+				if err != nil {
+					es.err = err
+					return
+				}
+				es.result = val
+				return
+			}
+			es.stack = append(es.stack, frame{
+				kind:        frameBuiltinArg,
+				builtin:     builtinFn,
+				builtinName: builtinName,
+				builtinDone: make([]Value, 0, len(argNodes)),
+				builtinArgs: argNodes,
+				builtinIdx:  0,
+			})
+			es.node = argNodes[0]
+			es.tail = false
+			es.evaluating = true
+			return
+		}
+		if headNode.Kind == NodeSymbol {
+			es.err = fmt.Errorf("cannot call %s: not a function", headNode.Str)
+			return
+		}
+		es.err = fmt.Errorf("cannot call %s value", es.result.KindName())
+		return
 
-		case frameApplyFn:
-			// result is the fn value
-			if result.Kind == ValForm {
-				e.locals = e.locals[:savedLocalsLen]
-				e.currentNodeID = savedNodeID
-				return Value{}, fmt.Errorf("apply: cannot apply a Form (forms receive unevaluated AST)")
+	case frameBuiltinArg:
+		f.builtinDone = append(f.builtinDone, es.result)
+		f.builtinIdx++
+		if f.builtinIdx < len(f.builtinArgs) {
+			es.node = f.builtinArgs[f.builtinIdx]
+			es.evaluating = true
+			return
+		}
+		fn := f.builtin
+		args := f.builtinDone
+		es.stack = es.stack[:len(es.stack)-1]
+		val, err := fn(args)
+		if err != nil {
+			es.err = err
+			return
+		}
+		es.result = val
+
+	case frameFnArg:
+		f.fnDone = append(f.fnDone, es.result)
+		f.fnIdx++
+		if f.fnIdx < len(f.fnArgs) {
+			es.node = f.fnArgs[f.fnIdx]
+			es.tail = false
+			es.evaluating = true
+			return
+		}
+		fn := f.fn
+		args := f.fnDone
+		frameTail := f.tail
+		es.stack = es.stack[:len(es.stack)-1]
+		es.node = e.enterFnBody(fn, args, frameTail, &es.stack)
+		es.tail = true
+		es.evaluating = true
+		return
+
+	case frameIfCond:
+		thenNode := f.thenNode
+		elseNode := f.elseNode
+		frameTail := f.tail
+		es.stack = es.stack[:len(es.stack)-1]
+		if es.result.Truthy() {
+			es.node = thenNode
+		} else {
+			es.node = elseNode
+		}
+		es.tail = frameTail
+		es.evaluating = true
+		return
+
+	case frameLetBind:
+		nameStr := f.bindPairs[f.bindIdx].Children[0].Str
+		f.bindings[nameStr] = es.result
+		f.bindIdx++
+		if f.bindIdx < len(f.bindPairs) {
+			pair := f.bindPairs[f.bindIdx]
+			if pair.Kind != NodeList || len(pair.Children) != 2 {
+				es.err = fmt.Errorf("let: each binding must be (name expr)")
+				return
 			}
-			if result.Kind != ValFn {
-				e.locals = e.locals[:savedLocalsLen]
-				e.currentNodeID = savedNodeID
-				return Value{}, fmt.Errorf("apply: first arg must be Fn, got %s", result.KindName())
+			if pair.Children[0].Kind != NodeSymbol {
+				es.err = fmt.Errorf("let: binding name must be a symbol")
+				return
 			}
-			applyListNode := f.applyListNode
+			es.node = pair.Children[1]
+			es.tail = false
+			es.evaluating = true
+			return
+		}
+		bodyNode := f.bodyNode
+		frameTail := f.tail
+		es.stack = es.stack[:len(es.stack)-1]
+		if !frameTail {
+			es.stack = append(es.stack, frame{kind: frameScopeCleanup})
+		}
+		es.node = bodyNode
+		es.tail = frameTail
+		es.evaluating = true
+		return
+
+	case frameLetrecBind:
+		f.bindings[f.bindNames[f.bindIdx]] = es.result
+		f.bindIdx++
+		if f.bindIdx < len(f.bindPairs) {
+			es.node = f.bindPairs[f.bindIdx].Children[1]
+			es.tail = false
+			es.evaluating = true
+			return
+		}
+		for _, val := range f.bindings {
+			if (val.Kind == ValFn || val.Kind == ValForm) && val.Fn != nil {
+				if val.Fn.Closure == nil {
+					val.Fn.Closure = make(map[string]Value, len(f.bindNames))
+				}
+				for _, name := range f.bindNames {
+					val.Fn.Closure[name] = f.bindings[name]
+				}
+			}
+		}
+		bodyNode := f.bodyNode
+		frameTail := f.tail
+		es.stack = es.stack[:len(es.stack)-1]
+		if !frameTail {
+			es.stack = append(es.stack, frame{kind: frameScopeCleanup})
+		}
+		es.node = bodyNode
+		es.tail = frameTail
+		es.evaluating = true
+		return
+
+	case frameDo:
+		f.doIdx++
+		if f.doIdx < len(f.doExprs)-1 {
+			es.node = f.doExprs[f.doIdx]
+			es.tail = false
+			es.evaluating = true
+			return
+		}
+		if f.doIdx == len(f.doExprs)-1 {
 			frameTail := f.tail
-			fn := result.Fn
-			stack = stack[:len(stack)-1]
-			stack = append(stack, frame{
+			es.node = f.doExprs[f.doIdx]
+			es.tail = frameTail
+			es.stack = es.stack[:len(es.stack)-1]
+			es.evaluating = true
+			return
+		}
+		es.stack = es.stack[:len(es.stack)-1]
+
+	case frameFormExpand:
+		frameTail := f.tail
+		es.stack = es.stack[:len(es.stack)-1]
+		expansionNode, err := valueToNode(es.result)
+		if err != nil {
+			es.err = fmt.Errorf("form expansion: %w", err)
+			return
+		}
+		es.node = expansionNode
+		es.tail = frameTail
+		es.evaluating = true
+		return
+
+	case frameApplyFn:
+		if es.result.Kind == ValForm {
+			es.err = fmt.Errorf("apply: cannot apply a Form (forms receive unevaluated AST)")
+			return
+		}
+		if es.result.Kind != ValFn && es.result.Kind != ValBuiltin {
+			es.err = fmt.Errorf("apply: first arg must be Fn or Builtin, got %s", es.result.KindName())
+			return
+		}
+		applyListNode := f.applyListNode
+		frameTail := f.tail
+		es.stack = es.stack[:len(es.stack)-1]
+		if es.result.Kind == ValBuiltin {
+			es.stack = append(es.stack, frame{
+				kind:        frameApplyList,
+				tail:        frameTail,
+				builtin:     es.result.BuiltinFunc,
+				builtinName: es.result.BuiltinName,
+			})
+		} else {
+			es.stack = append(es.stack, frame{
 				kind:    frameApplyList,
 				tail:    frameTail,
-				applyFn: fn,
+				applyFn: es.result.Fn,
 			})
-			node = applyListNode
-			tail = false // apply list arg is not in tail position
-			evaluating = true
-			continue
-
-		case frameApplyList:
-			// result is the list value
-			if result.Kind != ValList {
-				e.locals = e.locals[:savedLocalsLen]
-				e.currentNodeID = savedNodeID
-				return Value{}, fmt.Errorf("apply: second arg must be List, got %s", result.KindName())
-			}
-			fn := f.applyFn
-			args := *result.List
-			frameTail := f.tail
-			stack = stack[:len(stack)-1]
-			// Arity check
-			if fn.RestParam != "" {
-				if len(args) < len(fn.Params) {
-					e.locals = e.locals[:savedLocalsLen]
-					e.currentNodeID = savedNodeID
-					return Value{}, fmt.Errorf("fn: expected at least %d args, got %d", len(fn.Params), len(args))
-				}
-			} else {
-				if len(args) != len(fn.Params) {
-					e.locals = e.locals[:savedLocalsLen]
-					e.currentNodeID = savedNodeID
-					return Value{}, fmt.Errorf("fn: expected %d args, got %d", len(fn.Params), len(args))
-				}
-			}
-			node = e.enterFnBody(fn, args, frameTail, &stack)
-			tail = true // fn body is always in tail position
-			evaluating = true
-			continue
 		}
+		es.node = applyListNode
+		es.tail = false
+		es.evaluating = true
+		return
+
+	case frameApplyList:
+		if es.result.Kind != ValList {
+			es.err = fmt.Errorf("apply: second arg must be List, got %s", es.result.KindName())
+			return
+		}
+		args := *es.result.List
+		frameTail := f.tail
+		es.stack = es.stack[:len(es.stack)-1]
+		if f.builtin != nil {
+			// Builtin apply: call directly
+			val, err := f.builtin(args)
+			if err != nil {
+				es.err = err
+				return
+			}
+			es.result = val
+			_ = frameTail // builtins don't use tail position
+			return
+		}
+		fn := f.applyFn
+		if fn.RestParam != "" {
+			if len(args) < len(fn.Params) {
+				es.err = fmt.Errorf("fn: expected at least %d args, got %d", len(fn.Params), len(args))
+				return
+			}
+		} else {
+			if len(args) != len(fn.Params) {
+				es.err = fmt.Errorf("fn: expected %d args, got %d", len(fn.Params), len(args))
+				return
+			}
+		}
+		es.node = e.enterFnBody(fn, args, frameTail, &es.stack)
+		es.tail = true
+		es.evaluating = true
+		return
 	}
 }
 

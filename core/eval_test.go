@@ -369,6 +369,9 @@ func TestSortByUniversal(t *testing.T) {
 
 func TestEvalApply(t *testing.T) {
 	testEval(t, `(apply (fn (a b) (add a b)) (list 3 4))`, IntVal(7))
+	// Apply with builtins
+	testEval(t, `(apply add (list 3 4))`, IntVal(7))
+	testEval(t, `(apply list (list 1 2 3))`, ListVal([]Value{IntVal(1), IntVal(2), IntVal(3)}))
 }
 
 func TestEvalSortBy(t *testing.T) {
