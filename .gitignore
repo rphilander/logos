@@ -5,8 +5,8 @@ mod-time/mod-time
 mod-http-server/mod-http-server
 mcp-logos/mcp-logos
 
-# Data
-data/
+# Session log (ephemeral)
+data/log.logos
 
 # Sockets
 *.sock

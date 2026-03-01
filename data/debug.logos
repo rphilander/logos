@@ -1,0 +1,32 @@
+(define list-set (fn (xs i val) (letrec ((go (fn (j remaining acc) (if (empty? remaining) (reverse acc) (go (add j 1) (rest remaining) (cons (if (eq j i) val (head remaining)) acc)))))) (go 0 xs (list)))))
+
+(define ref-display (fn (ref rev-map) (let ((id (to-string ref))) (let ((name (get rev-map id))) (if (nil? name) id name)))))
+
+(define make-rev-syms (fn () (let ((syms (symbols))) (fold (fn (acc name) (put acc (to-string (get syms name)) name)) (dict) (keys syms)))))
+
+(define run-to-end (fn (s) (if (eq (get s :status) :done) s (if (eq (get s :status) :error) s (run-to-end (step-continue s))))))
+
+(define step-n (fn (s n) (if (le n 0) s (if (eq (get s :status) :done) s (if (eq (get s :status) :error) s (step-n (step-continue s) (sub n 1)))))))
+
+(define step-until (fn (s pred) (if (pred s) s (if (eq (get s :status) :done) s (if (eq (get s :status) :error) s (step-until (step-continue s) pred))))))
+
+(define step-watch (fn (s proj) (letrec ((go (fn (s acc) (let ((next (cons (proj s) acc))) (if (eq (get s :status) :done) (reverse next) (if (eq (get s :status) :error) (reverse next) (go (step-continue s) next))))))) (go s (list)))))
+
+(define get-local (fn (s name) (letrec ((search (fn (scopes) (if (empty? scopes) nil (if (has? (head scopes) name) (get (head scopes) name) (search (rest scopes))))))) (search (reverse (get s :locals))))))
+
+(define inject-local (fn (s name val) (let ((locals (get s :locals))) (letrec ((find-idx (fn (i) (if (lt i 0) nil (if (has? (nth locals i) name) i (find-idx (sub i 1))))))) (let ((idx (find-idx (sub (len locals) 1)))) (if (nil? idx) (if (empty? locals) (put s :locals (list (dict name val))) (put s :locals (list-set locals (sub (len locals) 1) (put (nth locals (sub (len locals) 1)) name val)))) (put s :locals (list-set locals idx (put (nth locals idx) name val)))))))))
+
+(define upstream (fn (sym) (let ((rev (make-rev-syms))) (letrec ((go (fn (queue visited) (if (empty? queue) visited (let ((ref (head queue))) (let ((display (ref-display ref rev))) (if (has? visited display) (go (rest queue) visited) (let ((sub-refs (collect-refs (node-expr ref)))) (go (append (rest queue) sub-refs) (put visited display true)))))))))) (keys (go (collect-refs (node-expr sym)) (dict)))))))
+
+(define downstream (fn (sym) (letrec ((go (fn (queue visited) (if (empty? queue) visited (let ((s (head queue))) (let ((name (to-string s))) (if (has? visited name) (go (rest queue) visited) (let ((deps (ref-by s))) (go (append (rest queue) deps) (put visited name true)))))))))) (keys (go (ref-by sym) (dict))))))
+
+(define between (fn (a b) (let ((rev (make-rev-syms)) (target (ref-display b rev))) (letrec ((go (fn (queue visited) (if (empty? queue) nil (let ((entry (head queue))) (let ((ref (head entry)) (path (nth entry 1))) (let ((display (ref-display ref rev))) (if (eq display target) (append path (list display)) (if (has? visited display) (go (rest queue) visited) (let ((sub-refs (collect-refs (node-expr ref))) (new-path (append path (list display)))) (go (append (rest queue) (map (fn (r) (list r new-path)) sub-refs)) (put visited display true)))))))))))) (go (map (fn (r) (list r (list))) (collect-refs (node-expr a))) (dict))))))
+
+(define library-contents (fn (lib) (let ((syms (symbols)) (prefix (concat "node:" lib "/"))) (filter (fn (name) (starts-with? (to-string (get syms name)) prefix)) (keys syms)))))
+
+(define replay (fn (t) (if (int? t) (step-eval (get (nth (traces) t) "entry")) (step-eval (get t "entry")))))
+
+(define count-fn-frames (fn (stack) (fold (fn (acc frame) (if (eq (get frame :kind) :fn-body) (add acc 1) acc)) 0 stack)))
+
+(define trace-expand (fn (t & args) (let ((limit (if (empty? args) 10 (head args))) (pred (if (le (len args) 1) nil (nth args 1))) (state (if (int? t) (replay t) (if (has? t "entry") (replay t) t))) (rev (make-rev-syms))) (letrec ((display-name (fn (nid) (if (eq nid "") "<anon>" (let ((found (get rev nid))) (if (nil? found) nid found))))) (go (fn (s prev-depth events count) (if (eq (get s :status) :done) (reverse events) (if (eq (get s :status) :error) (reverse (cons (dict :type :error :error (get s :error) :depth prev-depth) events)) (let ((next (step-continue s)) (depth (count-fn-frames (get next :stack)))) (cond (gt depth prev-depth) (let ((entry (dict :type :call :name (display-name (get next :node-id)) :depth depth))) (if (or (nil? pred) (pred entry)) (if (and (neq limit :all) (ge (add count 1) limit)) (reverse (cons entry events)) (go next depth (cons entry events) (add count 1))) (go next depth events count))) (lt depth prev-depth) (let ((entry (dict :type :return :result (get s :result) :depth (add depth 1)))) (if (or (nil? pred) (pred entry)) (if (and (neq limit :all) (ge (add count 1) limit)) (reverse (cons entry events)) (go next depth (cons entry events) (add count 1))) (go next depth events count))) true (go next depth events count)))))))) (go state 0 (list) 0)))))
+

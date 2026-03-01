@@ -1,0 +1,98 @@
+(define int? (fn (x) (eq (type x) :int)))
+
+(define float? (fn (x) (eq (type x) :float)))
+
+(define string? (fn (x) (eq (type x) :string)))
+
+(define bool? (fn (x) (eq (type x) :bool)))
+
+(define list? (fn (x) (eq (type x) :list)))
+
+(define map? (fn (x) (eq (type x) :map)))
+
+(define fn? (fn (x) (eq (type x) :fn)))
+
+(define keyword? (fn (x) (eq (type x) :keyword)))
+
+(define symbol? (fn (x) (eq (type x) :symbol)))
+
+(define node-ref? (fn (x) (eq (type x) :node-ref)))
+
+(define number? (fn (x) (or (eq (type x) :int) (eq (type x) :float))))
+
+(define inc (fn (x) (add x 1)))
+
+(define dec (fn (x) (sub x 1)))
+
+(define identity (fn (x) x))
+
+(define dependents (fn (sym) (ref-by sym)))
+
+(define describe (fn (sym) (let ((nref (get (symbols) (to-string sym))) (src (node-expr sym)) (deps (ref-by sym))) (dict "name" (to-string sym) "node-id" (to-string nref) "source" (to-string src) "dependents" deps))))
+
+(define constantly (fn (v) (fn (x) v)))
+
+(define comp (fn (f g) (fn (x) (f (g x)))))
+
+(define contains? (fn (s sub) (not (nil? (split-once sub s)))))
+
+(define search-source (fn (term) (let ((syms (symbols)) (names (keys syms))) (filter (fn (name) (let ((nref (get syms name)) (src (to-string (node-expr (get syms name))))) (contains? src term))) names))))
+
+(define explain-trace (fn (t) (let ((entry (get t "entry")) (err (get t "error")) (result (get t "result")) (sends (get t "sends")) (ts (get t "timestamp"))) (dict "entry" entry "timestamp" ts "outcome" (if (nil? err) (to-string result) (concat "ERROR: " err)) "sends" (map (fn (s) (dict "module" (get s "module") "request" (to-string (get s "request")) "response" (to-string (get s "response")))) sends)))))
+
+(define collect-refs (fn (ast) (if (node-ref? ast) (list ast) (if (list? ast) (fold (fn (acc x) (append acc (collect-refs x))) (list) ast) (list)))))
+
+(define dep-tree (fn (sym) (let ((refs (uniq (collect-refs (node-expr sym))))) (map (fn (ref) (let ((name (to-string ref)) (children (uniq (collect-refs (node-expr ref))))) (if (empty? children) (dict "name" name) (dict "name" name "deps" (map (fn (child) (dep-tree child)) children))))) refs))))
+
+(define fold (fn (f acc xs) (if (empty? xs) acc (fold f (f acc (head xs)) (rest xs)))))
+
+(define map (fn (f xs) (letrec ((go (fn (acc xs) (if (empty? xs) (reverse acc) (go (cons (f (head xs)) acc) (rest xs)))))) (go (list) xs))))
+
+(define filter (fn (f xs) (letrec ((go (fn (acc xs) (if (empty? xs) (reverse acc) (if (f (head xs)) (go (cons (head xs) acc) (rest xs)) (go acc (rest xs))))))) (go (list) xs))))
+
+(define group-by (fn (f xs) (fold (fn (acc x) (let ((k (to-string (f x))) (existing (get acc k))) (put acc k (if (nil? existing) (list x) (append existing (list x)))))) (dict) xs)))
+
+(define starts-with? (fn (s prefix) (let ((r (split-once prefix s))) (if (nil? r) false (eq (head r) "")))))
+
+(define ends-with? (fn (s suffix) (let ((r (split-once suffix s))) (if (nil? r) false (if (eq (nth r 1) "") true (ends-with? (nth r 1) suffix))))))
+
+(define replace (fn (s old new) (let ((r (split-once old s))) (if (nil? r) s (concat (head r) new (replace (nth r 1) old new))))))
+
+(define split (fn (s sep) (let ((r (split-once sep s))) (if (nil? r) (list s) (cons (head r) (split (nth r 1) sep))))))
+
+(define join (fn (sep xs) (if (empty? xs) "" (fold (fn (acc x) (concat acc sep x)) (head xs) (rest xs)))))
+
+(define not (fn (x) (if x false true)))
+
+(define and (form (a b) (list (quote if) a b false)))
+
+(define or (form (a b) (list (quote let) (list (list (quote __or-val__) a)) (list (quote if) (quote __or-val__) (quote __or-val__) b))))
+
+(define cond (form (& pairs) (letrec ((expand (fn (ps) (if (empty? ps) (quote nil) (list (quote if) (head ps) (nth ps 1) (expand (rest (rest ps)))))))) (expand pairs))))
+
+(define case (form (target & clauses) (letrec ((expand (fn (cs) (if (empty? cs) (quote nil) (if (eq (len cs) 1) (head cs) (list (quote if) (list (quote eq) (quote __case-target__) (head cs)) (nth cs 1) (expand (rest (rest cs))))))))) (list (quote let) (list (list (quote __case-target__) target)) (expand clauses)))))
+
+(define when (form (test body) (list (quote if) test body nil)))
+
+(define unless (form (test body) (list (quote if) test nil body)))
+
+(define nil? (fn (x) (eq (type x) :nil)))
+
+(define empty? (fn (xs) (eq (len xs) 0)))
+
+(define neq (fn (a b) (not (eq a b))))
+
+(define le (fn (a b) (or (lt a b) (eq a b))))
+
+(define ge (fn (a b) (or (gt a b) (eq a b))))
+
+(define reverse (fn (xs) (fold (fn (acc x) (cons x acc)) (list) xs)))
+
+(define member? (fn (xs x) (if (empty? xs) false (if (eq (head xs) x) true (member? (rest xs) x)))))
+
+(define uniq (fn (xs) (if (empty? xs) (list) (let ((sorted (sort-by identity xs))) (reverse (fold (fn (acc x) (if (eq (head acc) x) acc (cons x acc))) (list (head sorted)) (rest sorted)))))))
+
+(define dissoc (fn (m k) (fold (fn (acc key) (if (eq key k) acc (put acc key (get m key)))) (dict) (keys m))))
+
+(define merge (fn (m1 m2) (fold (fn (acc k) (put acc k (get m2 k))) m1 (keys m2))))
+
