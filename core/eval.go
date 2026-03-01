@@ -1,6 +1,7 @@
 package logos
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -1234,6 +1235,9 @@ func DataBuiltins() map[string]Builtin {
 		"has?": builtinHas,
 		// String
 		"split-once": builtinSplitOnce,
+		// JSON
+		"to-json":   builtinToJSON,
+		"from-json": builtinFromJSON,
 	}
 }
 
@@ -1774,4 +1778,33 @@ func builtinSplitOnce(args []Value) (Value, error) {
 	before := haystack[:idx]
 	after := haystack[idx+len(needle):]
 	return ListVal([]Value{StringVal(before), StringVal(after)}), nil
+}
+
+func builtinToJSON(args []Value) (Value, error) {
+	if len(args) != 1 {
+		return Value{}, fmt.Errorf("to-json: expected 1 arg, got %d", len(args))
+	}
+	goVal, err := ValueToGo(args[0])
+	if err != nil {
+		return Value{}, fmt.Errorf("to-json: %s", err)
+	}
+	data, err := json.Marshal(goVal)
+	if err != nil {
+		return Value{}, fmt.Errorf("to-json: %s", err)
+	}
+	return StringVal(string(data)), nil
+}
+
+func builtinFromJSON(args []Value) (Value, error) {
+	if len(args) != 1 {
+		return Value{}, fmt.Errorf("from-json: expected 1 arg, got %d", len(args))
+	}
+	if args[0].Kind != ValString {
+		return Value{}, fmt.Errorf("from-json: expected String, got %s", args[0].KindName())
+	}
+	var goVal any
+	if err := json.Unmarshal([]byte(args[0].Str), &goVal); err != nil {
+		return Value{}, fmt.Errorf("from-json: %s", err)
+	}
+	return GoToValue(goVal), nil
 }

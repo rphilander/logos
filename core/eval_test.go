@@ -777,3 +777,37 @@ func TestBuiltinKindName(t *testing.T) {
 		t.Fatalf("expected Builtin, got %s", v.KindName())
 	}
 }
+
+// --- JSON builtins ---
+
+func TestToJSON(t *testing.T) {
+	testEval(t, `(to-json 42)`, StringVal("42"))
+	testEval(t, `(to-json "hello")`, StringVal(`"hello"`))
+	testEval(t, `(to-json true)`, StringVal("true"))
+	testEval(t, `(to-json nil)`, StringVal("null"))
+	testEval(t, `(to-json (list 1 2 3))`, StringVal("[1,2,3]"))
+}
+
+func TestFromJSON(t *testing.T) {
+	testEval(t, `(from-json "42")`, IntVal(42))
+	testEval(t, `(from-json "\"hello\"")`, StringVal("hello"))
+	testEval(t, `(from-json "true")`, BoolVal(true))
+	testEval(t, `(from-json "null")`, NilVal())
+	testEval(t, `(from-json "[1,2,3]")`, ListVal([]Value{IntVal(1), IntVal(2), IntVal(3)}))
+}
+
+func TestJSONRoundtrip(t *testing.T) {
+	// map round-trip
+	testEval(t, `(from-json (to-json (dict "a" 1 "b" (list 2 3))))`,
+		MapVal(map[string]Value{"a": IntVal(1), "b": ListVal([]Value{IntVal(2), IntVal(3)})}))
+}
+
+func TestToJSONError(t *testing.T) {
+	// fn values can't be serialized
+	testEvalError(t, `(to-json (fn (x) x))`)
+}
+
+func TestFromJSONError(t *testing.T) {
+	// invalid JSON
+	testEvalError(t, `(from-json "not json")`)
+}
