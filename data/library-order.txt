@@ -2,3 +2,4 @@ base
 debug
 web
 db
+lang

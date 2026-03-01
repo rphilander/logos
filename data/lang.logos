@@ -1,0 +1,186 @@
+(define lang-ex-int-literal (dict "name" "integer literals" "expr" "(eq (type 42) :int)"))
+
+(define lang-ex-int-arithmetic (dict "name" "integer arithmetic" "expr" "(eq (add 2 3) 5)"))
+
+(define lang-ex-int-negative (dict "name" "negative integers" "expr" "(eq (sub 0 5) (sub 0 5))"))
+
+(define lang-test-int-zero (dict "name" "zero is an integer" "expr" "(eq (type 0) :int)"))
+
+(define lang-test-int-mod (dict "name" "modulo" "expr" "(eq (mod 7 3) 1)"))
+
+(define lang-test-int-not-float (dict "name" "int is not float" "expr" "(not (eq (type 42) :float))"))
+
+(define lang-type-int (dict "symbol" "lang-type-int" "name" "Integer" "description" "Whole numbers, positive or negative. Written as bare digits: 42, 0, -3. Arithmetic builtins: add, sub, mul, div, mod. Integer division truncates: (div 7 2) returns 3. Use a float operand to get float division: (div 7.0 2) returns 3.5." "keywords" (list "whole number" "integer" "numeric" "number" "math" "modulo" "truncation" "digit") "examples" (list lang-ex-int-literal lang-ex-int-arithmetic lang-ex-int-negative) "tests" (list lang-test-int-zero lang-test-int-mod lang-test-int-not-float)))
+
+(define lang-ex-float-literal (dict "name" "float literals" "expr" "(eq (type 3.14) :float)"))
+
+(define lang-ex-float-arithmetic (dict "name" "float arithmetic" "expr" "(eq (add 1.5 2.5) 4.0)"))
+
+(define lang-test-float-int-promotion (dict "name" "int + float produces float" "expr" "(eq (type (add 1 1.5)) :float)"))
+
+(define lang-test-float-division (dict "name" "float division" "expr" "(eq (type (div 7.0 2)) :float)"))
+
+(define lang-type-float (dict "symbol" "lang-type-float" "name" "Float" "description" "Floating-point numbers. Written with a decimal point: 3.14, 0.5, -2.7. Arithmetic with mixed int and float operands promotes the result to float." "keywords" (list "decimal" "floating point" "numeric" "number" "precision" "math" "real number") "examples" (list lang-ex-float-literal lang-ex-float-arithmetic) "tests" (list lang-test-float-int-promotion lang-test-float-division)))
+
+(define lang-ex-bool-literals (dict "name" "boolean literals" "expr" "(and (eq (type true) :bool) (eq (type false) :bool))"))
+
+(define lang-ex-bool-from-comparison (dict "name" "comparisons return bools" "expr" "(eq (type (lt 1 2)) :bool)"))
+
+(define lang-test-bool-false-is-falsy (dict "name" "false is falsy" "expr" "(eq (if false :no :yes) :yes)"))
+
+(define lang-test-bool-true-is-truthy (dict "name" "true is truthy" "expr" "(eq (if true :yes :no) :yes)"))
+
+(define lang-type-bool (dict "symbol" "lang-type-bool" "name" "Boolean" "description" "true and false. Produced by comparisons (lt, gt, eq) and logical operations. false is one of two falsy values (the other is nil). All other values are truthy." "keywords" (list "boolean" "true false" "logical" "predicate" "condition" "flag" "truth") "examples" (list lang-ex-bool-literals lang-ex-bool-from-comparison) "tests" (list lang-test-bool-false-is-falsy lang-test-bool-true-is-truthy)))
+
+(define lang-ex-string-literal (dict "name" "string literals" "expr" "(eq (type \"hello\") :string)"))
+
+(define lang-ex-string-concat (dict "name" "string concatenation" "expr" "(eq (concat \"hello\" \" \" \"world\") \"hello world\")"))
+
+(define lang-test-string-empty (dict "name" "empty string" "expr" "(eq (type \"\") :string)"))
+
+(define lang-test-string-to-string (dict "name" "to-string on int" "expr" "(eq (to-string 42) \"42\")"))
+
+(define lang-test-string-split-once (dict "name" "split-once is the string primitive" "expr" "(eq (split-once \",\" \"a,b,c\") (list \"a\" \"b,c\"))"))
+
+(define lang-type-string (dict "symbol" "lang-type-string" "name" "String" "description" "Text values in double quotes. The core provides concat for building strings and split-once as the sole decomposition primitive. No positional indexing, no len on strings — this is by design (encoding-agnostic). Higher-level string operations (split, join, replace, contains?, starts-with?, ends-with?) are built in the base library from split-once and concat." "keywords" (list "text" "characters" "concatenation" "split" "encoding" "double quotes") "examples" (list lang-ex-string-literal lang-ex-string-concat) "tests" (list lang-test-string-empty lang-test-string-to-string lang-test-string-split-once)))
+
+(define lang-ex-keyword-literal (dict "name" "keyword literals" "expr" "(eq (type :foo) :keyword)"))
+
+(define lang-ex-keyword-equality (dict "name" "keyword equality" "expr" "(eq :hello :hello)"))
+
+(define lang-test-keyword-as-map-key (dict "name" "keywords as map keys" "expr" "(eq (get (dict :x 1 :y 2) :x) 1)"))
+
+(define lang-test-keyword-distinct-from-string (dict "name" "keyword is not a string" "expr" "(not (eq :foo \"foo\"))"))
+
+(define lang-type-keyword (dict "symbol" "lang-type-keyword" "name" "Keyword" "description" "Self-evaluating identifiers prefixed with colon: :foo, :status, :int. Commonly used as map keys and as enum-like tags. Keywords are distinct from strings — :foo does not equal \"foo\". The type builtin returns keywords to identify types: :int, :float, :string, :keyword, :bool, :nil, :list, :map, :fn, :form, :builtin." "keywords" (list "tag" "enum" "colon prefix" "self-evaluating" "type tag" "label") "examples" (list lang-ex-keyword-literal lang-ex-keyword-equality) "tests" (list lang-test-keyword-as-map-key lang-test-keyword-distinct-from-string)))
+
+(define lang-ex-symbol-quote (dict "name" "creating symbols with quote" "expr" "(eq (type 'foo) :symbol)"))
+
+(define lang-ex-symbol-equality (dict "name" "symbol equality" "expr" "(eq 'foo 'foo)"))
+
+(define lang-test-symbol-distinct-from-string (dict "name" "symbol is not a string" "expr" "(not (eq 'foo \"foo\"))"))
+
+(define lang-test-symbol-to-string (dict "name" "symbol to-string" "expr" "(eq (to-string 'foo) \"foo\")"))
+
+(define lang-type-symbol (dict "symbol" "lang-type-symbol" "name" "Symbol" "description" "Symbolic identifiers created with quote: 'foo, 'my-name. Symbols are values, not references — they are inert data. In source code, bare names like foo are resolved to graph node references at define time; 'foo prevents this resolution and creates a symbol value instead. Useful for metaprogramming and as keys. Can be converted to string with to-string." "keywords" (list "quote" "quoted" "name" "identifier" "metaprogramming" "unevaluated") "examples" (list lang-ex-symbol-quote lang-ex-symbol-equality) "tests" (list lang-test-symbol-distinct-from-string lang-test-symbol-to-string)))
+
+(define lang-ex-noderef-from-symbols (dict "name" "node-refs from symbols builtin" "expr" "(eq (type (get (symbols) \"fold\")) :node-ref)"))
+
+(define lang-ex-noderef-system-only (dict "name" "node-refs are system-generated" "expr" "(not (eq (type 'fold) :node-ref))"))
+
+(define lang-test-noderef-node-expr (dict "name" "node-expr works on node-refs" "expr" "(list? (node-expr (get (symbols) \"fold\")))"))
+
+(define lang-type-node-ref (dict "symbol" "lang-type-node-ref" "name" "Node Reference" "description" "A reference to a specific immutable node in the graph. Node-refs are system-generated — there is no syntax to create them directly. They are produced by graph builtins like symbols (which returns a map of name to node-ref) and appear inside ASTs returned by node-expr. Graph builtins accept both symbols and node-refs interchangeably; a symbol resolves to its current node-ref." "keywords" (list "node reference" "graph node" "pointer" "immutable node" "system-generated") "examples" (list lang-ex-noderef-from-symbols lang-ex-noderef-system-only) "tests" (list lang-test-noderef-node-expr)))
+
+(define lang-ex-nil-literal (dict "name" "nil literal" "expr" "(eq (type nil) :nil)"))
+
+(define lang-ex-nil-falsy (dict "name" "nil is falsy" "expr" "(eq (if nil :yes :no) :no)"))
+
+(define lang-test-nil-not-false (dict "name" "nil is not false" "expr" "(not (eq nil false))"))
+
+(define lang-test-nil-get-missing (dict "name" "get on missing key returns nil" "expr" "(eq (get (dict :a 1) :b) nil)"))
+
+(define lang-type-nil (dict "symbol" "lang-type-nil" "name" "Nil" "description" "The absence of a value. Written as nil. One of two falsy values (the other is false). Returned by get on missing map keys, by if branches that don't match, and as the default when no value is applicable. nil is not false — they are distinct values of different types that both happen to be falsy." "keywords" (list "null" "nothing" "absent" "missing" "void" "no value" "undefined") "examples" (list lang-ex-nil-literal lang-ex-nil-falsy) "tests" (list lang-test-nil-not-false lang-test-nil-get-missing)))
+
+(define lang-ex-list-literal (dict "name" "list construction" "expr" "(eq (type (list 1 2 3)) :list)"))
+
+(define lang-ex-list-head-rest (dict "name" "head and rest" "expr" "(and (eq (head (list 1 2 3)) 1) (eq (rest (list 1 2 3)) (list 2 3)))"))
+
+(define lang-ex-list-cons (dict "name" "cons prepends" "expr" "(eq (cons 0 (list 1 2)) (list 0 1 2))"))
+
+(define lang-test-list-empty (dict "name" "empty list" "expr" "(eq (len (list)) 0)"))
+
+(define lang-test-list-nth (dict "name" "nth access" "expr" "(eq (nth (list :a :b :c) 2) :c)"))
+
+(define lang-test-list-append (dict "name" "append joins lists" "expr" "(eq (append (list 1 2) (list 3 4)) (list 1 2 3 4))"))
+
+(define lang-test-list-nested (dict "name" "nested lists" "expr" "(eq (head (head (list (list 1 2) (list 3 4)))) 1)"))
+
+(define lang-type-list (dict "symbol" "lang-type-list" "name" "List" "description" "Ordered sequences created with the list builtin: (list 1 2 3). Access with head (first element), rest (everything after first), nth (by index, 0-based). Build with cons (prepend), append (join two lists). len returns the number of elements. Lists can be heterogeneous — elements can be any type, including other lists. The base library provides map, filter, fold, reverse, member?, uniq, and sort-by for list processing." "keywords" (list "sequence" "array" "collection" "ordered" "vector" "linked list" "cons cell") "examples" (list lang-ex-list-literal lang-ex-list-head-rest lang-ex-list-cons) "tests" (list lang-test-list-empty lang-test-list-nth lang-test-list-append lang-test-list-nested)))
+
+(define lang-ex-map-literal (dict "name" "map construction with dict" "expr" "(eq (type (dict \"a\" 1 \"b\" 2)) :map)"))
+
+(define lang-ex-map-get (dict "name" "get retrieves values" "expr" "(eq (get (dict :x 10 :y 20) :x) 10)"))
+
+(define lang-ex-map-put (dict "name" "put adds or updates a key" "expr" "(eq (get (put (dict :a 1) :b 2) :b) 2)"))
+
+(define lang-test-map-empty (dict "name" "empty map" "expr" "(eq (len (dict)) 0)"))
+
+(define lang-test-map-keys (dict "name" "keys returns key list" "expr" "(eq (len (keys (dict :a 1 :b 2 :c 3))) 3)"))
+
+(define lang-test-map-has (dict "name" "has? checks key existence" "expr" "(and (has? (dict :a 1) :a) (not (has? (dict :a 1) :b)))"))
+
+(define lang-test-map-string-and-keyword-keys (dict "name" "keyword and string keys are equivalent in maps" "expr" "(eq (get (dict :a 1) \"a\") 1)"))
+
+(define lang-type-map (dict "symbol" "lang-type-map" "name" "Map" "description" "Key-value dictionaries created with dict: (dict \"key\" value :key2 value2). Keys are strings internally — keywords are coerced to their string form, so :a and \"a\" refer to the same key. Access with get, update with put (returns new map, original unchanged). keys returns a list of all keys, len returns the count. has? tests key existence. Maps are immutable — put and dissoc return new maps. The base library provides dissoc (remove key) and merge (combine maps)." "keywords" (list "dictionary" "hash" "key-value" "associative" "object" "record" "struct") "examples" (list lang-ex-map-literal lang-ex-map-get lang-ex-map-put) "tests" (list lang-test-map-empty lang-test-map-keys lang-test-map-has lang-test-map-string-and-keyword-keys)))
+
+(define lang-ex-fn-lambda (dict "name" "anonymous function" "expr" "(eq ((fn (x) (add x 1)) 10) 11)"))
+
+(define lang-ex-fn-closure (dict "name" "closures capture scope" "expr" "(let (adder (fn (n) (fn (x) (add x n)))) (eq ((adder 5) 10) 15))"))
+
+(define lang-ex-fn-rest-params (dict "name" "rest parameters" "expr" "(let (f (fn (a & rest) rest)) (eq (f 1 2 3) (list 2 3)))"))
+
+(define lang-test-fn-type (dict "name" "fn type check" "expr" "(eq (type (fn (x) x)) :fn)"))
+
+(define lang-test-fn-higher-order (dict "name" "functions as arguments" "expr" "(eq (map (fn (x) (mul x 2)) (list 1 2 3)) (list 2 4 6))"))
+
+(define lang-type-fn (dict "symbol" "lang-type-fn" "name" "Function" "description" "Created with fn: (fn (params) body). Functions are first-class values — they can be passed as arguments, returned from other functions, and stored in data structures. Functions close over their lexical scope at creation time (closures). Rest parameters with & collect remaining arguments into a list: (fn (a & rest) body). Named functions are created by defining an fn expression: (define double (fn (x) (mul x 2))). Recursion works naturally — unresolved symbols in function bodies resolve via the graph at eval time. Tail calls are optimized (TCO)." "keywords" (list "function" "lambda" "closure" "callable" "procedure" "anonymous function" "first-class") "examples" (list lang-ex-fn-lambda lang-ex-fn-closure lang-ex-fn-rest-params) "tests" (list lang-test-fn-type lang-test-fn-higher-order)))
+
+(define lang-ex-form-basic (dict "name" "form receives unevaluated AST" "expr" "(let (my-when (form (test body) (list 'if test body nil))) (eq (my-when true :yes) :yes))"))
+
+(define lang-ex-form-short-circuit (dict "name" "forms enable short-circuit evaluation" "expr" "(do (or true (assert false \"should not reach here\")) true)"))
+
+(define lang-test-form-type (dict "name" "form type check" "expr" "(eq (type (form (x) x)) :form)"))
+
+(define lang-test-form-rest-params (dict "name" "form with rest params" "expr" "(let (my-list (form (& args) (cons 'list args))) (eq (my-list 1 2 3) (list 1 2 3)))"))
+
+(define lang-type-form (dict "symbol" "lang-type-form" "name" "Form" "description" "Like fn but receives unevaluated AST as logos data (symbols, lists, literals). Created with form: (form (params) body). The body returns an expansion — a value that is converted back to AST and evaluated in the caller's scope. This enables user-defined control flow: short-circuit logic (and, or), multi-way branching (cond, case), and conditional execution (when, unless). Forms support rest params with &. In the base library, cond, case, and, or, when, and unless are all defined as forms." "keywords" (list "macro" "fexpr" "special form" "syntax" "metaprogramming" "expansion" "unevaluated arguments") "examples" (list lang-ex-form-basic lang-ex-form-short-circuit) "tests" (list lang-test-form-type lang-test-form-rest-params)))
+
+(define lang-ex-builtin-first-class (dict "name" "builtins are first-class values" "expr" "(eq (type add) :builtin)"))
+
+(define lang-ex-builtin-passable (dict "name" "builtins can be passed to functions" "expr" "(eq (fold add 0 (list 1 2 3 4)) 10)"))
+
+(define lang-test-builtin-apply (dict "name" "apply works on builtins" "expr" "(eq (apply add (list 3 4)) 7)"))
+
+(define lang-type-builtin (dict "symbol" "lang-type-builtin" "name" "Builtin" "description" "Go-implemented functions exposed to logos. Builtins are first-class values — they can be stored in variables, passed as arguments to higher-order functions like map and fold, and called with apply. There are 31 builtins covering data operations, arithmetic, comparison, list/map manipulation, string operations, JSON, type checking, graph introspection, tracing, and step debugging." "keywords" (list "native" "primitive" "go function" "built-in" "system function" "intrinsic") "examples" (list lang-ex-builtin-first-class lang-ex-builtin-passable) "tests" (list lang-test-builtin-apply)))
+
+(define lang-ex-truthy-values (dict "name" "non-nil non-false values are truthy" "expr" "(and (if 0 true false) (and (if \"\" true false) (and (if (list) true false) (if :x true false))))"))
+
+(define lang-ex-truthy-only-two-falsy (dict "name" "only nil and false are falsy" "expr" "(and (not nil) (not false))"))
+
+(define lang-test-truthy-zero (dict "name" "zero is truthy" "expr" "(if 0 true false)"))
+
+(define lang-test-truthy-empty-string (dict "name" "empty string is truthy" "expr" "(if \"\" true false)"))
+
+(define lang-test-truthy-empty-list (dict "name" "empty list is truthy" "expr" "(if (list) true false)"))
+
+(define lang-concept-truthy (dict "symbol" "lang-concept-truthy" "name" "Truthy and Falsy" "description" "nil and false are falsy. Everything else is truthy — including 0, empty string, and empty list. This is simpler than many languages where various 'empty' values are falsy. It means you can use (if x ...) to test for nil without worrying about legitimate zero or empty values being treated as absent." "keywords" (list "truthiness" "boolean coercion" "condition" "nil false" "zero is truthy") "examples" (list lang-ex-truthy-values lang-ex-truthy-only-two-falsy) "tests" (list lang-test-truthy-zero lang-test-truthy-empty-string lang-test-truthy-empty-list)))
+
+(define lang-ex-eq-structural (dict "name" "structural equality for collections" "expr" "(and (eq (list 1 2 3) (list 1 2 3)) (eq (dict :a 1) (dict :a 1)))"))
+
+(define lang-ex-eq-cross-type (dict "name" "different types are never equal" "expr" "(and (not (eq 1 1.0)) (and (not (eq :foo \"foo\")) (not (eq nil false))))"))
+
+(define lang-test-eq-nested (dict "name" "deep structural equality" "expr" "(eq (list (dict :a (list 1 2)) :b) (list (dict :a (list 1 2)) :b))"))
+
+(define lang-concept-equality (dict "symbol" "lang-concept-equality" "name" "Equality" "description" "eq tests structural equality. For primitives (int, float, bool, string, keyword, nil), it compares values. For collections (list, map), it compares deeply — two lists are equal if they have the same elements in the same order, two maps are equal if they have the same keys with equal values. Different types are never equal: 1 does not equal 1.0, :foo does not equal \"foo\", nil does not equal false." "keywords" (list "equal" "comparison" "deep equality" "same value" "eq") "examples" (list lang-ex-eq-structural lang-ex-eq-cross-type) "tests" (list lang-test-eq-nested)))
+
+(define lang-types (dict "symbol" "lang-types" "name" "Types" "description" "Logos has 13 types. Dynamic typing — values carry their type, variables don't. Strong typing — no implicit coercion between types (except int promotion to float in mixed arithmetic). The type builtin returns a keyword identifying any value's type." "members" (list lang-type-int lang-type-float lang-type-bool lang-type-string lang-type-keyword lang-type-symbol lang-type-node-ref lang-type-nil lang-type-list lang-type-map lang-type-fn lang-type-form lang-type-builtin) "concepts" (list lang-concept-truthy lang-concept-equality)))
+
+(define lang-run-test (fn (test-node) (let (expr-str (get test-node "expr") name (get test-node "name") state (run-to-end (step-eval expr-str)) status (get state :status)) (if (eq status :done) (let (result (get state :result)) (dict "name" name "pass" (eq result true) "expr" expr-str)) (dict "name" name "pass" false "expr" expr-str "error" (get state :error))))))
+
+(define lang-collect-tests (fn (node) (let (examples (get node "examples") tests (get node "tests") members (get node "members") concepts (get node "concepts") own-tests (append (if (nil? examples) (list) examples) (if (nil? tests) (list) tests)) member-tests (if (nil? members) (list) (fold (fn (acc m) (append acc (lang-collect-tests m))) (list) members)) concept-tests (if (nil? concepts) (list) (fold (fn (acc c) (append acc (lang-collect-tests c))) (list) concepts))) (append own-tests (append member-tests concept-tests)))))
+
+(define lang-validate (fn (node) (let (tests (lang-collect-tests node) results (map lang-run-test tests) passed (filter (fn (r) (get r "pass")) results) failed (filter (fn (r) (not (get r "pass"))) results)) (dict "total" (len results) "passed" (len passed) "failed" (len failed) "failures" failed))))
+
+(define lang-describe (fn (node & opts) (let (depth (if (empty? opts) :brief (head opts)) name (get node "name") desc (get node "description") examples (get node "examples") members (get node "members") concepts (get node "concepts") header (concat "## " name "\n\n" desc "\n") example-section (if (nil? examples) "" (concat "\n### Examples\n" (join "\n" (map (fn (ex) (concat "- **" (get ex "name") "**: `" (get ex "expr") "`")) examples)) "\n")) member-section (if (nil? members) "" (if (eq depth :brief) (concat "\n### Members\n" (join "\n" (map (fn (m) (concat "- **" (get m "name") "**: " (get m "description"))) members)) "\n") (concat "\n" (join "\n\n" (map (fn (m) (lang-describe m depth)) members)) "\n"))) concept-section (if (nil? concepts) "" (if (eq depth :brief) (concat "\n### Concepts\n" (join "\n" (map (fn (c) (concat "- **" (get c "name") "**: " (get c "description"))) concepts)) "\n") (concat "\n" (join "\n\n" (map (fn (c) (lang-describe c depth)) concepts)) "\n")))) (concat header example-section member-section concept-section))))
+
+(define lang-search-matches? (fn (node query) (let (name (get node "name") desc (get node "description") kws (get node "keywords") in-name (if (nil? name) false (contains? name query)) in-desc (if (nil? desc) false (contains? desc query)) in-kws (if (nil? kws) false (fold (fn (acc kw) (or acc (contains? kw query))) false kws))) (or in-name (or in-desc in-kws)))))
+
+(define lang-search-result (fn (node path depth parent-name sibling-symbols) (let (base (dict "name" (get node "name") "symbol" (get node "symbol") "path" path) r1 (if (ge depth 1) (put base "description" (get node "description")) base) r2 (if (ge depth 2) (let (examples (get node "examples")) (if (nil? examples) (put r1 "examples" (list)) (put r1 "examples" (map (fn (e) (dict "name" (get e "name") "expr" (get e "expr"))) examples)))) r1) r3 (if (ge depth 3) (put (put r2 "parent" parent-name) "siblings" sibling-symbols) r2)) r3)))
+
+(define lang-search-in (fn (query depth node path parent-name sibling-symbols) (let (name (get node "name") current-path (if (eq path "") name (concat path " > " name)) is-match (lang-search-matches? node query) own-result (if is-match (list (lang-search-result node current-path depth parent-name sibling-symbols)) (list)) members (get node "members") concepts (get node "concepts") all-children (append (if (nil? members) (list) members) (if (nil? concepts) (list) concepts)) child-symbols (map (fn (c) (get c "symbol")) all-children) child-results (fold (fn (acc child) (append acc (lang-search-in query depth child current-path name child-symbols))) (list) all-children)) (append own-result child-results))))
+
+(define lang-search (fn (query & opts) (let (depth (if (empty? opts) 1 (head opts)) roots (if (le (len opts) 1) (list lang) (nth opts 1))) (fold (fn (acc root) (append acc (lang-search-in query depth root "" "" (list)))) (list) roots))))
+
+(define lang (dict "symbol" "lang" "name" "Logos Language Reference" "description" "Self-validating language reference for the logos programming environment." "members" (list lang-types)))
+
