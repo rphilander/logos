@@ -24,7 +24,6 @@ type Core struct {
 	graph       *Graph
 	modules     []*ModuleInfo
 	modMu       sync.Mutex // protects modules slice
-	modCount    int
 	requests    chan coreRequest
 	listener    net.Listener // CLI socket
 	modListener net.Listener // module socket
@@ -570,40 +569,49 @@ func (c *Core) handleCallbackConnection(conn net.Conn) {
 }
 
 func (c *Core) handleModuleConnection(conn net.Conn) {
-	c.modMu.Lock()
-	id := fmt.Sprintf("mod:%d", c.modCount)
-	c.modCount++
-	mod := &ModuleInfo{
-		ID:   id,
-		conn: conn,
-	}
-	c.modules = append(c.modules, mod)
-	c.modMu.Unlock()
-
-	// Send empty request — module responds with its manual
+	// Send empty request — module responds with name + manual
 	discoverID := NextID()
 	if err := WriteMsg(conn, map[string]any{"id": discoverID}); err != nil {
-		log.Printf("module %s: write discovery: %v", id, err)
-		c.removeModule(id)
+		log.Printf("module: write discovery: %v", err)
+		conn.Close()
 		return
 	}
 
-	// Read manual response
 	manualMsg, err := ReadMsg(conn)
 	if err != nil {
-		log.Printf("module %s: read manual: %v", id, err)
-		c.removeModule(id)
+		log.Printf("module: read discovery: %v", err)
+		conn.Close()
 		return
 	}
 
-	// Store the manual
+	// Extract module name
+	name, ok := manualMsg["name"].(string)
+	if !ok || name == "" {
+		log.Fatalf("module connected without a name — every module must include a \"name\" field in its discovery response")
+	}
+
+	// Check for duplicate name
+	c.modMu.Lock()
+	for _, m := range c.modules {
+		if m.ID == name {
+			c.modMu.Unlock()
+			log.Fatalf("duplicate module name: %q — a module with this name is already connected", name)
+		}
+	}
+
+	mod := &ModuleInfo{
+		ID:   name,
+		conn: conn,
+	}
 	if val, ok := manualMsg["value"]; ok {
 		mod.Manual = GoToValue(val)
 	} else {
 		mod.Manual = GoToValue(manualMsg)
 	}
+	c.modules = append(c.modules, mod)
+	c.modMu.Unlock()
 
-	log.Printf("module %s connected", id)
+	log.Printf("module %s connected", name)
 }
 
 func (c *Core) removeModule(id string) {

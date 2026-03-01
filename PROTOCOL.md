@@ -34,16 +34,24 @@ Every message is a JSON object with an `"id"` field (string).
 {"id": "r2", "ok": false, "error": "file not found"}
 ```
 
-## Empty Request
+## Discovery
 
-A request with no fields beyond `"id"` should be answered with a **manual** — a description of the module and how to use it. Format is up to you.
+When a module connects, the core immediately sends an empty request (`{"id": "..."}`) to discover the module. The module must respond with:
+
+```json
+{"id": "...", "ok": true, "name": "my-module", "value": "...manual text..."}
+```
+
+The `"name"` field is **required**. The core uses it as the module's stable identifier. If a module with the same name is already connected, the core exits with an error.
+
+After discovery, the core sends subsequent requests with `"op"` fields. A request with no `"op"` should return the manual (same as the discovery response).
 
 ## Sending Requests to the Core
 
-If your module needs to send requests to the core, connect to the callback socket (`LOGOS_CB_SOCK`, default `/tmp/logos-cb.sock`) using the same wire format.
+If your module needs to send requests to the core (e.g., to dispatch incoming events), connect to the callback socket (`LOGOS_CB_SOCK`, default `/tmp/logos-cb.sock`) using the same wire format.
 
-The core receives requests from multiple modules on this socket. To identify yourself, generate a UUID at startup and include it as `"module"` in every message you send to the core. Document in your manual what the UUID represents. UUIDs are important here — they guarantee no collisions between modules.
+Include `"module": "my-module"` in every message you send to the core on the callback socket. Use the same name from your discovery response.
 
 ## That's It
 
-Connect, receive requests, send responses. Stay connected — disconnecting unregisters the module.
+Connect, receive the discovery request, respond with your name and manual, then handle subsequent requests. Stay connected — disconnecting unregisters the module.

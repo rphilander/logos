@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,19 +12,17 @@ import (
 	"os/signal"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
 
-func newUUID() string {
-	var buf [16]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		log.Fatalf("generate uuid: %v", err)
-	}
-	buf[6] = (buf[6] & 0x0f) | 0x40 // version 4
-	buf[8] = (buf[8] & 0x3f) | 0x80 // variant 2
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
+const moduleName = "mod-mcp-server"
+
+var reqCounter uint64
+
+func nextID() string {
+	return fmt.Sprintf("r%d", atomic.AddUint64(&reqCounter, 1))
 }
 
 // --- JSON-RPC types ---
@@ -270,7 +267,7 @@ func (s *MCPServer) handleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *MCPServer) handleInitialize(w http.ResponseWriter, req *JSONRPCRequest) {
-	sessionID := newUUID()
+	sessionID := nextID()
 
 	session := &Session{id: sessionID}
 	s.sessionsMu.Lock()
@@ -369,10 +366,10 @@ func (s *MCPServer) handleToolsCall(req *JSONRPCRequest) *JSONRPCResponse {
 	}
 
 	// send callback to core
-	cbReqID := newUUID()
+	cbReqID := nextID()
 	cbReq := &CallbackRequest{
 		ID:        cbReqID,
-		Module:    s.module.moduleID,
+		Module:    moduleName,
 		Port:      s.port,
 		Tool:      params.Name,
 		Arguments: params.Arguments,
@@ -508,8 +505,6 @@ type CallbackResponse struct {
 // --- Module ---
 
 type Module struct {
-	moduleID string
-
 	modConn net.Conn
 	cbConn  net.Conn
 
@@ -523,7 +518,7 @@ type Module struct {
 	pendingMu sync.Mutex
 }
 
-func (m *Module) handleOp(req *Request) *Response {
+func (m *Module) handleOp(req *Request) any {
 	switch req.Op {
 	case "listen":
 		return m.opListen(req)
@@ -544,13 +539,8 @@ func (m *Module) handleOp(req *Request) *Response {
 	}
 }
 
-func (m *Module) opManual(req *Request) *Response {
-	manual := fmt.Sprintf(`mod-mcp-server — MCP server module for logos
-
-Module UUID: %s
-
-Every callback message sent to the core includes "module": "<uuid>" set to
-the UUID above, so the core can identify requests from this module instance.
+func (m *Module) opManual(req *Request) any {
+	manual := `mod-mcp-server — MCP server module for logos
 
 Operations:
   listen       {"op": "listen", "port": 8080}
@@ -573,12 +563,12 @@ Operations:
     List tools registered on a port.
 
 When an MCP client calls a tool, this module sends a callback to the core:
-  {"id": "...", "module": "%s", "port": 8080, "tool": "name", "arguments": {...}}
+  {"id": "...", "module": "mod-mcp-server", "port": 8080, "tool": "name", "arguments": {...}}
 
 The core should respond with:
-  {"ok": true, "value": "result text or data"}`, m.moduleID, m.moduleID)
+  {"ok": true, "value": "result text or data"}`
 
-	return &Response{ID: req.ID, OK: true, Value: manual}
+	return map[string]any{"id": req.ID, "ok": true, "name": moduleName, "value": manual}
 }
 
 func (m *Module) opListen(req *Request) *Response {
@@ -864,13 +854,12 @@ func main() {
 	log.Printf("connected to callback socket: %s", cbSock)
 
 	m := &Module{
-		moduleID: newUUID(),
-		modConn:  modConn,
-		cbConn:   cbConn,
-		servers:  make(map[int]*MCPServer),
-		pending:  make(map[string]chan *CallbackResponse),
+		modConn: modConn,
+		cbConn:  cbConn,
+		servers: make(map[int]*MCPServer),
+		pending: make(map[string]chan *CallbackResponse),
 	}
-	log.Printf("module id: %s", m.moduleID)
+	log.Printf("module: %s", moduleName)
 
 	go m.readCallbackLoop()
 

@@ -192,6 +192,7 @@ func dispatch(conn net.Conn) {
 
 		switch op {
 		case "":
+			resp["name"] = "mod-time"
 			value = manual
 		case "now":
 			value, errStr = handleNow(req)

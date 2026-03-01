@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,19 +12,15 @@ import (
 	"os/signal"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
 
-func newUUID() string {
-	var buf [16]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		log.Fatalf("generate uuid: %v", err)
-	}
-	buf[6] = (buf[6] & 0x0f) | 0x40 // version 4
-	buf[8] = (buf[8] & 0x3f) | 0x80 // variant 2
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
+var reqCounter uint64
+
+func nextID() string {
+	return fmt.Sprintf("r%d", atomic.AddUint64(&reqCounter, 1))
 }
 
 // --- types ---
@@ -71,9 +66,9 @@ type CallbackResponse struct {
 
 // --- module ---
 
-type Module struct {
-	moduleID string
+const moduleName = "mod-http-server"
 
+type Module struct {
 	modConn net.Conn
 	cbConn  net.Conn
 
@@ -87,7 +82,7 @@ type Module struct {
 	pendingMu sync.Mutex
 }
 
-func (m *Module) handleOp(req *Request) *Response {
+func (m *Module) handleOp(req *Request) any {
 	switch req.Op {
 	case "listen":
 		return m.opListen(req)
@@ -102,10 +97,8 @@ func (m *Module) handleOp(req *Request) *Response {
 	}
 }
 
-func (m *Module) opManual(req *Request) *Response {
-	manual := fmt.Sprintf(`mod-http-server — HTTP server module for logos
-
-Module UUID: %s
+func (m *Module) opManual(req *Request) any {
+	manual := `mod-http-server — HTTP server module for logos
 
 Operations:
   listen   {"op": "listen", "port": 8080}       Start listening on a port.
@@ -117,12 +110,9 @@ callback to the core with:
   id, module, port, method, path, query, headers, body
 
 The core should respond with:
-  {"ok": true, "value": {"status": 200, "headers": {...}, "body": "..."}}
+  {"ok": true, "value": {"status": 200, "headers": {...}, "body": "..."}}`
 
-The "module" field in every callback is this module's UUID shown above.
-Use it to identify and route requests from this module instance.`, m.moduleID)
-
-	return &Response{ID: req.ID, OK: true, Value: manual}
+	return map[string]any{"id": req.ID, "ok": true, "name": moduleName, "value": manual}
 }
 
 func (m *Module) opListen(req *Request) *Response {
@@ -208,10 +198,10 @@ func (m *Module) httpHandler(port int) http.Handler {
 			headers[k] = r.Header.Get(k)
 		}
 
-		reqID := newUUID()
+		reqID := nextID()
 		cbReq := &CallbackRequest{
 			ID:      reqID,
-			Module:  m.moduleID,
+			Module:  moduleName,
 			Port:    port,
 			Method:  r.Method,
 			Path:    r.URL.Path,
@@ -363,13 +353,12 @@ func main() {
 	log.Printf("connected to callback socket: %s", cbSock)
 
 	m := &Module{
-		moduleID:  newUUID(),
 		modConn:   modConn,
 		cbConn:    cbConn,
 		listeners: make(map[int]*http.Server),
 		pending:   make(map[string]chan *CallbackResponse),
 	}
-	log.Printf("module id: %s", m.moduleID)
+	log.Printf("module: %s", moduleName)
 
 	go m.readCallbackLoop()
 

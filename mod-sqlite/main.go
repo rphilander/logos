@@ -48,7 +48,9 @@ type Module struct {
 	dbsMu sync.Mutex
 }
 
-func (m *Module) handleOp(req *Request) *Response {
+const moduleName = "mod-sqlite"
+
+func (m *Module) handleOp(req *Request) any {
 	switch req.Op {
 	case "open":
 		return m.opOpen(req)
@@ -71,7 +73,7 @@ func (m *Module) handleOp(req *Request) *Response {
 	}
 }
 
-func (m *Module) opManual(req *Request) *Response {
+func (m *Module) opManual(req *Request) any {
 	manual := `mod-sqlite — SQLite database module for logos
 
 Operations:
@@ -99,7 +101,7 @@ Operations:
   drop       {"op": "drop", "db": "mydb.db"}
              Close the database and delete its file.`
 
-	return &Response{ID: req.ID, OK: true, Value: manual}
+	return map[string]any{"id": req.ID, "ok": true, "name": moduleName, "value": manual}
 }
 
 func (m *Module) getDB(req *Request) (*sql.DB, *Response) {

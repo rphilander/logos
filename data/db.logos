@@ -1,4 +1,4 @@
-(define db-mod "mod:2")
+(define db-mod "mod-sqlite")
 
 (define db-open (fn (name) (send db-mod (dict "op" "open" "db" name))))
 
@@ -13,6 +13,4 @@
 (define db-list (fn () (send db-mod (dict "op" "list"))))
 
 (define db-drop (fn (name) (send db-mod (dict "op" "drop" "db" name))))
-
-(define db-mod "mod:1")
 
