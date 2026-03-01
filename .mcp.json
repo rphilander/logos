@@ -5,6 +5,10 @@
       "env": {
         "LOGOS_SOCK": "/tmp/logos.sock"
       }
+    },
+    "nisaba-test": {
+      "type": "http",
+      "url": "http://localhost:8081/mcp"
     }
   }
 }

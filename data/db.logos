@@ -1,0 +1,18 @@
+(define db-mod "mod:2")
+
+(define db-open (fn (name) (send db-mod (dict "op" "open" "db" name))))
+
+(define db-close (fn (name) (send db-mod (dict "op" "close" "db" name))))
+
+(define db-query (fn (name sql & params) (if (empty? params) (send db-mod (dict "op" "query" "db" name "sql" sql)) (send db-mod (dict "op" "query" "db" name "sql" sql "params" (head params))))))
+
+(define db-exec (fn (name sql & params) (if (empty? params) (send db-mod (dict "op" "exec" "db" name "sql" sql)) (send db-mod (dict "op" "exec" "db" name "sql" sql "params" (head params))))))
+
+(define db-exec-multi (fn (name stmts) (send db-mod (dict "op" "exec-multi" "db" name "stmts" stmts))))
+
+(define db-list (fn () (send db-mod (dict "op" "list"))))
+
+(define db-drop (fn (name) (send db-mod (dict "op" "drop" "db" name))))
+
+(define db-mod "mod:1")
+
