@@ -73,10 +73,36 @@ An early version stored member/example/test lists as symbol name strings (e.g., 
 
 **Future:** Refreshes could become more ergonomic. For instance, some symbols could auto-refresh with test functions as guard rails — redefine a node, its dependents refresh, and associated tests run automatically as validation.
 
+## Observations from Building the Web UI
+
+### 1. Refresh discipline is real friction
+Redefined `lang-ui-page`, but the browser showed the old version because `on-request` held a stale node-ref. Had to manually `refresh-all`. The auto-refresh with test guards idea (from the design decision section) would have caught this. This is the highest-priority ergonomic improvement.
+
+### 2. String→node lookup problem resurfaced at the API boundary
+The HTTP API receives query parameters as strings (e.g., `"lang-type-int"`). We need the node value. Built `lang-node-index` to walk the tree and create a name→value map — another workaround for the missing `eval`/`resolve` builtin. It also rebuilds the index on every request. An `eval` builtin would eliminate this entirely.
+
+### 3. `split` vs `split-once` argument order is inconsistent
+`split-once` takes `(delimiter, string)`, `split` takes `(string, delimiter)`. Tripped up the query string parser. Should be documented in the lang library builtins section and possibly fixed for consistency.
+
+### 4. Library migration is manual
+Moving symbols from session to library required: close library → delete each from session → reopen library → redefine each. A `move-to-library` core operation would streamline this common workflow.
+
+### 5. `on-request` is a single global callback handler
+All module callbacks (mod-http-server, mod-mcp-server) dispatch to the same `on-request` function. The callback message includes `"module"`, so we can dispatch on that, but the single-handler design may need rethinking as more modules use callbacks. Consider per-module handlers or a callback routing layer.
+
+### 6. `define` should report stale dependents
+When you redefine a symbol, the response is just `{name, node_id}`. It should also report which symbols still reference the now-superseded node — a staleness reminder. The graph already tracks `ref-by`, so this is cheap to compute. Example: redefine `lang-ui-page` → response includes `"stale_dependents": ["on-request"]`. This turns a hidden footgun into an explicit prompt.
+
+### 7. The vision works
+Redefine a function → refresh → live website updates. No build, no deploy. The loop from "I want search" to "search is live in the browser" happened in one conversation. Zero source files written — only the library log.
+
 ## Enhancements (after lang library is complete)
 
 - **Case-insensitive search**: `contains?` is case-sensitive. `lang-search` relies on lowercase keywords to partially cover this, but searching "arithmetic" won't match description text "Arithmetic builtins...". Fix: add a `lower-case` string builtin in Go, then lowercase both query and fields in `lang-search-matches?`.
-- **`eval` or `resolve` builtin**: `lang-eval-symbol` uses `step-eval` to go from symbol name to value — heavyweight. A simple builtin would make the graph-as-data-store pattern much more ergonomic and reduce fuel cost of search/validate.
+- **`eval` or `resolve` builtin**: `lang-eval-symbol` uses `step-eval` to go from symbol name to value — heavyweight. A simple builtin would make the graph-as-data-store pattern much more ergonomic and reduce fuel cost of search/validate. Also needed at API boundaries (HTTP query params → node values).
 - **Variadic `and`/`or`**: binary forms require nesting. Rest params + recursive expansion would fix this.
 - **Generalize `lang-describe`**: not specific to lang nodes. Any node following the name/description/examples/tests/members convention could use it. Maybe belongs in a shared utility space.
 - **Fuel**: `lang-validate lang-types` needs ~500K fuel for 68 tests via step-eval. Will grow as more sections are added.
+- **Stale dependent reporting on define**: include `ref-by` results for the superseded node in the define response, so the caller knows what needs refreshing.
+- **`move-to-library` operation**: streamline the session → library migration workflow.
+- **Per-module callback routing**: allow registering handlers per module instead of a single `on-request`.
