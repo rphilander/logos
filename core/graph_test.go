@@ -36,7 +36,7 @@ const hofLibrary = `(define nil? (fn (x) (eq (type x) :nil)))
 
 (define filter (fn (f xs) (filter-acc f (list) xs)))
 
-(define group-by (fn (f xs) (fold (fn (acc x) (let ((k (to-string (f x))) (existing (get acc k))) (put acc k (if (nil? existing) (list x) (append existing (list x)))))) (dict) xs)))
+(define group-by (fn (f xs) (fold (fn (acc x) (let (k (to-string (f x)) existing (get acc k)) (put acc k (if (nil? existing) (list x) (append existing (list x)))))) (dict) xs)))
 `
 
 const formLibrary = `(define not (fn (x) (if x false true)))
@@ -51,11 +51,11 @@ const formLibrary = `(define not (fn (x) (if x false true)))
 
 (define and (form (a b) (list (quote if) a b false)))
 
-(define or (form (a b) (list (quote let) (list (list (quote __or-val__) a)) (list (quote if) (quote __or-val__) (quote __or-val__) b))))
+(define or (form (a b) (list (quote let) (list (quote __or-val__) a) (list (quote if) (quote __or-val__) (quote __or-val__) b))))
 
-(define cond (form (& pairs) (letrec ((expand (fn (ps) (if (empty? ps) (quote nil) (list (quote if) (head ps) (nth ps 1) (expand (rest (rest ps)))))))) (expand pairs))))
+(define cond (form (& pairs) (letrec (expand (fn (ps) (if (empty? ps) (quote nil) (list (quote if) (head ps) (nth ps 1) (expand (rest (rest ps))))))) (expand pairs))))
 
-(define case (form (target & clauses) (letrec ((expand (fn (cs) (if (empty? cs) (quote nil) (if (eq (len cs) 1) (head cs) (list (quote if) (list (quote eq) (quote __case-target__) (head cs)) (nth cs 1) (expand (rest (rest cs))))))))) (list (quote let) (list (list (quote __case-target__) target)) (expand clauses)))))
+(define case (form (target & clauses) (letrec (expand (fn (cs) (if (empty? cs) (quote nil) (if (eq (len cs) 1) (head cs) (list (quote if) (list (quote eq) (quote __case-target__) (head cs)) (nth cs 1) (expand (rest (rest cs)))))))) (list (quote let) (list (quote __case-target__) target) (expand clauses)))))
 
 (define when (form (test body) (list (quote if) test body nil)))
 
@@ -1191,7 +1191,7 @@ func TestTailRecursiveAccumulator(t *testing.T) {
 
 func TestTailPositionLet(t *testing.T) {
 	g := testGraph(t)
-	g.Define("loop", `(fn (n) (let ((m (sub n 1))) (if (lt m 1) 0 (loop m))))`)
+	g.Define("loop", `(fn (n) (let (m (sub n 1)) (if (lt m 1) 0 (loop m))))`)
 	val, err := g.Eval(`(loop 100000)`)
 	if err != nil {
 		t.Fatal(err)
@@ -1626,7 +1626,7 @@ func TestLibraryOrShortCircuit(t *testing.T) {
 func TestLibraryFormNoDoubleEval(t *testing.T) {
 	g := testGraphWithFormLibrary(t)
 	// Use a side-effecting expression (assert) to verify single evaluation.
-	g.Define("make-counter", `(fn () (let ((n 0)) (fn () (add n 1))))`)
+	g.Define("make-counter", `(fn () (let (n 0) (fn () (add n 1))))`)
 
 	// or: target expression should only be evaluated once
 	val, err := g.Eval(`(or (add 1 2) "fallback")`)

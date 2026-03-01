@@ -91,6 +91,8 @@ func (p *parser) parseNode() (*Node, error) {
 	}
 	ch := p.input[p.pos]
 	switch {
+	case ch == '\'':
+		return p.parseQuote()
 	case ch == '(':
 		return p.parseList()
 	case ch == '"':
@@ -98,6 +100,21 @@ func (p *parser) parseNode() (*Node, error) {
 	default:
 		return p.parseAtom()
 	}
+}
+
+func (p *parser) parseQuote() (*Node, error) {
+	p.pos++ // skip '\''
+	inner, err := p.parseNode()
+	if err != nil {
+		return nil, err
+	}
+	return &Node{
+		Kind: NodeList,
+		Children: []*Node{
+			{Kind: NodeSymbol, Str: "quote"},
+			inner,
+		},
+	}, nil
 }
 
 func (p *parser) parseList() (*Node, error) {
@@ -208,5 +225,5 @@ func (p *parser) skipWhitespace() {
 }
 
 func isDelimiter(ch rune) bool {
-	return unicode.IsSpace(ch) || ch == '(' || ch == ')' || ch == '"' || ch == ';'
+	return unicode.IsSpace(ch) || ch == '(' || ch == ')' || ch == '"' || ch == ';' || ch == '\''
 }

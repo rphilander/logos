@@ -142,7 +142,7 @@ func TestStepContinueAdd(t *testing.T) {
 
 func TestStepContinueFnCall(t *testing.T) {
 	ev := makeStepEval()
-	state, err := ev.builtinStepEval([]Value{StringVal("(let ((f (fn (x) (add x 1)))) (f 10))")})
+	state, err := ev.builtinStepEval([]Value{StringVal("(let (f (fn (x) (add x 1))) (f 10))")})
 	if err != nil {
 		t.Fatalf("step-eval error: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestStepContinueDo(t *testing.T) {
 func TestStepContinueLetrec(t *testing.T) {
 	ev := makeStepEval()
 	// Simple letrec without recursion
-	state, err := ev.builtinStepEval([]Value{StringVal("(letrec ((x 10) (y 20)) (add x y))")})
+	state, err := ev.builtinStepEval([]Value{StringVal("(letrec (x 10 y 20) (add x y))")})
 	if err != nil {
 		t.Fatalf("step-eval error: %v", err)
 	}
@@ -384,7 +384,7 @@ func TestStepFuelExhaustion(t *testing.T) {
 func TestStepWhatIfModifyLocals(t *testing.T) {
 	ev := makeStepEval()
 	// Start with let that binds x=10, then computes (add x 1)
-	state, err := ev.builtinStepEval([]Value{StringVal("(let ((x 10)) (add x 1))")})
+	state, err := ev.builtinStepEval([]Value{StringVal("(let (x 10) (add x 1))")})
 	if err != nil {
 		t.Fatalf("step-eval error: %v", err)
 	}
@@ -560,7 +560,7 @@ func TestStepEvalViaEvalString(t *testing.T) {
 func TestStepRecursiveFn(t *testing.T) {
 	ev := makeStepEval()
 	// Factorial via letrec
-	expr := `(letrec ((fact (fn (n) (if (eq n 0) 1 (mul n (fact (sub n 1))))))) (fact 5))`
+	expr := `(letrec (fact (fn (n) (if (eq n 0) 1 (mul n (fact (sub n 1)))))) (fact 5))`
 	state, err := ev.builtinStepEval([]Value{StringVal(expr)})
 	if err != nil {
 		t.Fatalf("step-eval error: %v", err)
@@ -592,7 +592,7 @@ func TestStepRestParams(t *testing.T) {
 func TestStepForm(t *testing.T) {
 	ev := makeStepEval()
 	// A simple form that wraps in a list
-	state, err := ev.builtinStepEval([]Value{StringVal("(let ((my-when (form (cond body) (list (quote if) cond body nil)))) (my-when true 42))")})
+	state, err := ev.builtinStepEval([]Value{StringVal("(let (my-when (form (cond body) (list (quote if) cond body nil))) (my-when true 42))")})
 	if err != nil {
 		t.Fatalf("step-eval error: %v", err)
 	}

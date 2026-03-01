@@ -320,7 +320,11 @@ func (e *Evaluator) evalStep(es *evalState) {
 						es.err = fmt.Errorf("let: bindings must be a list")
 						return
 					}
-					bindings := make(map[string]Value, len(bindingsNode.Children))
+					if len(bindingsNode.Children)%2 != 0 {
+						es.err = fmt.Errorf("let: bindings must have an even number of forms")
+						return
+					}
+					bindings := make(map[string]Value, len(bindingsNode.Children)/2)
 					e.pushScope(bindings)
 					if len(bindingsNode.Children) == 0 {
 						if !es.tail {
@@ -329,12 +333,7 @@ func (e *Evaluator) evalStep(es *evalState) {
 						es.node = es.node.Children[2]
 						return
 					}
-					pair := bindingsNode.Children[0]
-					if pair.Kind != NodeList || len(pair.Children) != 2 {
-						es.err = fmt.Errorf("let: each binding must be (name expr)")
-						return
-					}
-					if pair.Children[0].Kind != NodeSymbol {
+					if bindingsNode.Children[0].Kind != NodeSymbol {
 						es.err = fmt.Errorf("let: binding name must be a symbol")
 						return
 					}
@@ -347,7 +346,7 @@ func (e *Evaluator) evalStep(es *evalState) {
 						bodyNode:  es.node.Children[2],
 						scopeIdx:  len(e.locals) - 1,
 					})
-					es.node = pair.Children[1]
+					es.node = bindingsNode.Children[1]
 					es.tail = false
 					return
 
@@ -361,19 +360,20 @@ func (e *Evaluator) evalStep(es *evalState) {
 						es.err = fmt.Errorf("letrec: bindings must be a list")
 						return
 					}
-					names := make([]string, len(bindingsNode.Children))
-					for i, pair := range bindingsNode.Children {
-						if pair.Kind != NodeList || len(pair.Children) != 2 {
-							es.err = fmt.Errorf("letrec: each binding must be (name expr)")
-							return
-						}
-						if pair.Children[0].Kind != NodeSymbol {
+					if len(bindingsNode.Children)%2 != 0 {
+						es.err = fmt.Errorf("letrec: bindings must have an even number of forms")
+						return
+					}
+					numBindings := len(bindingsNode.Children) / 2
+					names := make([]string, numBindings)
+					for i := 0; i < len(bindingsNode.Children); i += 2 {
+						if bindingsNode.Children[i].Kind != NodeSymbol {
 							es.err = fmt.Errorf("letrec: binding name must be a symbol")
 							return
 						}
-						names[i] = pair.Children[0].Str
+						names[i/2] = bindingsNode.Children[i].Str
 					}
-					scope := make(map[string]Value, len(names))
+					scope := make(map[string]Value, numBindings)
 					e.pushScope(scope)
 					if len(bindingsNode.Children) == 0 {
 						if !es.tail {
@@ -392,7 +392,7 @@ func (e *Evaluator) evalStep(es *evalState) {
 						bodyNode:  es.node.Children[2],
 						scopeIdx:  len(e.locals) - 1,
 					})
-					es.node = bindingsNode.Children[0].Children[1]
+					es.node = bindingsNode.Children[1]
 					es.tail = false
 					return
 
@@ -675,20 +675,15 @@ func (e *Evaluator) evalStep(es *evalState) {
 		return
 
 	case frameLetBind:
-		nameStr := f.bindPairs[f.bindIdx].Children[0].Str
+		nameStr := f.bindPairs[f.bindIdx].Str
 		f.bindings[nameStr] = es.result
-		f.bindIdx++
+		f.bindIdx += 2
 		if f.bindIdx < len(f.bindPairs) {
-			pair := f.bindPairs[f.bindIdx]
-			if pair.Kind != NodeList || len(pair.Children) != 2 {
-				es.err = fmt.Errorf("let: each binding must be (name expr)")
-				return
-			}
-			if pair.Children[0].Kind != NodeSymbol {
+			if f.bindPairs[f.bindIdx].Kind != NodeSymbol {
 				es.err = fmt.Errorf("let: binding name must be a symbol")
 				return
 			}
-			es.node = pair.Children[1]
+			es.node = f.bindPairs[f.bindIdx+1]
 			es.tail = false
 			es.evaluating = true
 			return
@@ -705,10 +700,10 @@ func (e *Evaluator) evalStep(es *evalState) {
 		return
 
 	case frameLetrecBind:
-		f.bindings[f.bindNames[f.bindIdx]] = es.result
-		f.bindIdx++
+		f.bindings[f.bindNames[f.bindIdx/2]] = es.result
+		f.bindIdx += 2
 		if f.bindIdx < len(f.bindPairs) {
-			es.node = f.bindPairs[f.bindIdx].Children[1]
+			es.node = f.bindPairs[f.bindIdx+1]
 			es.tail = false
 			es.evaluating = true
 			return

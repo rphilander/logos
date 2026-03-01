@@ -1,12 +1,12 @@
 (define route (fn (method path handler) (dict "method" method "path" path "handler" handler)))
 
-(define match-route (fn (req routes) (letrec ((go (fn (rs) (if (empty? rs) nil (let ((r (head rs))) (if (and (eq (get r "method") (get req "method")) (eq (get r "path") (get req "path"))) r (go (rest rs)))))))) (go routes))))
+(define match-route (fn (req routes) (letrec (go (fn (rs) (if (empty? rs) nil (let (r (head rs)) (if (and (eq (get r "method") (get req "method")) (eq (get r "path") (get req "path"))) r (go (rest rs))))))) (go routes))))
 
-(define dispatch (fn (req routes) (let ((matched (match-route req routes))) (if (nil? matched) (dict "status" 404 "headers" (dict "Content-Type" "text/plain") "body" "Not Found") ((get matched "handler") req)))))
+(define dispatch (fn (req routes) (let (matched (match-route req routes)) (if (nil? matched) (dict "status" 404 "headers" (dict "Content-Type" "text/plain") "body" "Not Found") ((get matched "handler") req)))))
 
 (define script-end (concat "<" "/script>"))
 
-(define html-page (fn (title body-html vue-data) (let ((se script-end)) (concat "<!DOCTYPE html>
+(define html-page (fn (title body-html vue-data) (let (se script-end) (concat "<!DOCTYPE html>
 <html>
 <head>
   <meta charset=\"utf-8\">

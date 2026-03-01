@@ -51,54 +51,54 @@ func TestEvalIfTruthy(t *testing.T) {
 // --- Let ---
 
 func TestEvalLet(t *testing.T) {
-	testEval(t, `(let ((x 1)) x)`, IntVal(1))
-	testEval(t, `(let ((x 1) (y 2)) (list x y))`, ListVal([]Value{IntVal(1), IntVal(2)}))
+	testEval(t, `(let (x 1) x)`, IntVal(1))
+	testEval(t, `(let (x 1 y 2) (list x y))`, ListVal([]Value{IntVal(1), IntVal(2)}))
 }
 
 func TestEvalLetSequential(t *testing.T) {
-	testEval(t, `(let ((x 1) (y x)) y)`, IntVal(1))
+	testEval(t, `(let (x 1 y x) y)`, IntVal(1))
 }
 
 // --- Letrec ---
 
 func TestEvalLetrecSelfRecursion(t *testing.T) {
 	// Countdown to 0
-	testEval(t, `(letrec ((f (fn (n) (if (eq n 0) 0 (f (sub n 1)))))) (f 5))`, IntVal(0))
+	testEval(t, `(letrec (f (fn (n) (if (eq n 0) 0 (f (sub n 1))))) (f 5))`, IntVal(0))
 }
 
 func TestEvalLetrecMutualRecursion(t *testing.T) {
-	testEval(t, `(letrec ((even? (fn (n) (if (eq n 0) true (odd? (sub n 1)))))
-	                       (odd?  (fn (n) (if (eq n 0) false (even? (sub n 1))))))
+	testEval(t, `(letrec (even? (fn (n) (if (eq n 0) true (odd? (sub n 1))))
+	                      odd?  (fn (n) (if (eq n 0) false (even? (sub n 1)))))
 	               (list (even? 4) (odd? 3)))`,
 		ListVal([]Value{BoolVal(true), BoolVal(true)}))
 }
 
 func TestEvalLetrecNonFunction(t *testing.T) {
-	testEval(t, `(letrec ((x 42)) x)`, IntVal(42))
+	testEval(t, `(letrec (x 42) x)`, IntVal(42))
 }
 
 func TestEvalLetrecMixed(t *testing.T) {
 	// fn references a non-fn binding from same letrec
-	testEval(t, `(letrec ((base 10) (f (fn (n) (add n base)))) (f 5))`, IntVal(15))
+	testEval(t, `(letrec (base 10 f (fn (n) (add n base))) (f 5))`, IntVal(15))
 }
 
 func TestEvalLetrecSequential(t *testing.T) {
 	// Later bindings see earlier ones during evaluation
-	testEval(t, `(letrec ((x 1) (y x)) y)`, IntVal(1))
+	testEval(t, `(letrec (x 1 y x) y)`, IntVal(1))
 }
 
 func TestEvalLetrecNested(t *testing.T) {
-	testEval(t, `(letrec ((f (fn (n) (if (eq n 0) 0
-	               (letrec ((g (fn (m) (f (sub m 1))))) (g n))))))
+	testEval(t, `(letrec (f (fn (n) (if (eq n 0) 0
+	               (letrec (g (fn (m) (f (sub m 1)))) (g n)))))
 	             (f 3))`, IntVal(0))
 }
 
 func TestEvalLetrecErrors(t *testing.T) {
 	testEvalError(t, `(letrec)`)
-	testEvalError(t, `(letrec ((x 1)))`)            // missing body
+	testEvalError(t, `(letrec (x 1))`)               // missing body
 	testEvalError(t, `(letrec "bad" x)`)             // bindings not a list
-	testEvalError(t, `(letrec ((1 2)) x)`)           // name not a symbol
-	testEvalError(t, `(letrec ((x)) x)`)             // binding pair wrong length
+	testEvalError(t, `(letrec (1 2) x)`)             // name not a symbol
+	testEvalError(t, `(letrec (x) x)`)               // odd number of bindings
 }
 
 // --- Fuel ---
@@ -126,7 +126,7 @@ func testEvalFuelError(t *testing.T, input string, fuel int) {
 
 func TestFuelExhaustion(t *testing.T) {
 	// Infinite recursion caught by fuel
-	testEvalFuelError(t, `(letrec ((f (fn () (f)))) (f))`, 100)
+	testEvalFuelError(t, `(letrec (f (fn () (f))) (f))`, 100)
 }
 
 func TestFuelSufficient(t *testing.T) {
@@ -645,7 +645,7 @@ func TestFormFuelCatchesInfiniteExpansion(t *testing.T) {
 
 func TestFormInLetrecBackpatch(t *testing.T) {
 	// Forms should be back-patched in letrec just like fns
-	testEval(t, `(letrec ((my-when (form (test body) (list (quote if) test body nil))))
+	testEval(t, `(letrec (my-when (form (test body) (list (quote if) test body nil)))
 		(my-when true 42))`, IntVal(42))
 }
 
@@ -745,7 +745,7 @@ func TestValBuiltinType(t *testing.T) {
 
 func TestBuiltinAsValue(t *testing.T) {
 	// Builtin bound to a local, then called via computed head
-	testEval(t, `(let ((f add)) (f 1 2))`, IntVal(3))
+	testEval(t, `(let (f add) (f 1 2))`, IntVal(3))
 }
 
 func TestBuiltinHigherOrder(t *testing.T) {
@@ -761,7 +761,7 @@ func TestBuiltinEquality(t *testing.T) {
 
 func TestBuiltinNoArgComputedHead(t *testing.T) {
 	// Builtin with no args called via computed head
-	testEval(t, `(let ((f list)) (f))`, ListVal([]Value{}))
+	testEval(t, `(let (f list) (f))`, ListVal([]Value{}))
 }
 
 func TestBuiltinString(t *testing.T) {
