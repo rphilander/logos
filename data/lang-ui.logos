@@ -1,0 +1,202 @@
+(define parse-query (fn (qs) (if (nil? qs) (dict) (fold (fn (acc pair) (let (kv (split-once "=" pair)) (if (nil? kv) acc (put acc (head kv) (nth kv 1))))) (dict) (split qs "&")))))
+
+(define lang-node-index (fn (node) (let (sym (get node "symbol") members (get node "members") concepts (get node "concepts") own (if (nil? sym) (dict) (dict sym node)) child-entries (fold (fn (acc child) (merge acc (lang-node-index child))) (dict) (append (if (nil? members) (list) members) (if (nil? concepts) (list) concepts)))) (merge own child-entries))))
+
+(define lang-api-node (fn (node) (let (result (dict "name" (get node "name") "symbol" (get node "symbol") "description" (get node "description") "keywords" (get node "keywords")) with-examples (if (nil? (get node "examples")) result (put result "examples" (map (fn (ex) (dict "name" (get ex "name") "expr" (get ex "expr"))) (get node "examples")))) with-tests (if (nil? (get node "tests")) with-examples (put with-examples "tests" (map (fn (t) (dict "name" (get t "name") "expr" (get t "expr"))) (get node "tests")))) with-members (if (nil? (get node "members")) with-tests (put with-tests "members" (map (fn (m) (dict "name" (get m "name") "symbol" (get m "symbol") "description" (get m "description"))) (get node "members")))) with-concepts (if (nil? (get node "concepts")) with-members (put with-members "concepts" (map (fn (c) (dict "name" (get c "name") "symbol" (get c "symbol") "description" (get c "description"))) (get node "concepts"))))) with-concepts)))
+
+(define lang-api-tree (fn (node) (let (base (dict "name" (get node "name") "symbol" (get node "symbol")) members (get node "members") concepts (get node "concepts") all-children (append (if (nil? members) (list) members) (if (nil? concepts) (list) concepts)) with-children (if (empty? all-children) base (put base "children" (map lang-api-tree all-children)))) with-children)))
+
+(define lang-ui-page (fn () (let (se (concat "<" "/script>")) (concat "<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=\"utf-8\">
+  <title>Logos Language Reference</title>
+  <link href=\"https://cdn.jsdelivr.net/npm/vuetify@3/dist/vuetify.min.css\" rel=\"stylesheet\">
+  <link href=\"https://cdn.jsdelivr.net/npm/@mdi/font@7/css/materialdesignicons.min.css\" rel=\"stylesheet\">
+  <script src=\"https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js\">" se "
+  <script src=\"https://cdn.jsdelivr.net/npm/vuetify@3/dist/vuetify.min.js\">" se "
+  <style>
+    .code-block { background: #f5f5f5; padding: 8px 12px; border-radius: 4px; font-family: monospace; font-size: 14px; }
+    .nav-tree .v-list-item { min-height: 36px; }
+  </style>
+</head>
+<body>
+  <div id=\"app\">
+    <v-app>
+      <v-app-bar color=\"indigo-darken-2\" density=\"compact\">
+        <v-app-bar-title>Logos Language Reference</v-app-bar-title>
+        <v-text-field
+          v-model=\"searchQuery\"
+          placeholder=\"Search...\"
+          prepend-inner-icon=\"mdi-magnify\"
+          density=\"compact\"
+          variant=\"solo-filled\"
+          flat
+          hide-details
+          single-line
+          style=\"max-width: 300px\"
+          class=\"mr-4\"
+          @keyup.enter=\"doSearch\"
+          clearable
+          @click:clear=\"clearSearch\"
+        ></v-text-field>
+      </v-app-bar>
+      <v-navigation-drawer permanent width=\"280\" class=\"nav-tree\">
+        <v-list density=\"compact\" nav>
+          <template v-for=\"section in tree.children\" :key=\"section.symbol\">
+            <v-list-subheader>{{ section.name }}</v-list-subheader>
+            <v-list-item
+              v-for=\"child in section.children\"
+              :key=\"child.symbol\"
+              :title=\"child.name\"
+              :active=\"selected === child.symbol\"
+              @click=\"selectNode(child.symbol)\"
+              color=\"indigo\"
+            ></v-list-item>
+          </template>
+        </v-list>
+      </v-navigation-drawer>
+      <v-main>
+        <v-container v-if=\"searchResults !== null\">
+          <h2 class=\"text-h5 mb-3\">Search results for '{{ lastSearch }}'</h2>
+          <p v-if=\"searchResults.length === 0\" class=\"text-body-1 text-grey\">No results found.</p>
+          <v-card v-for=\"r in searchResults\" :key=\"r.symbol\" variant=\"outlined\" class=\"mb-2\" @click=\"selectNode(r.symbol)\" style=\"cursor:pointer\">
+            <v-card-text>
+              <div class=\"d-flex align-center mb-1\">
+                <strong>{{ r.name }}</strong>
+                <v-chip size=\"x-small\" class=\"ml-2\" color=\"grey\">{{ r.path }}</v-chip>
+              </div>
+              <div v-if=\"r.description\" class=\"text-body-2 text-grey-darken-1\">{{ r.description }}</div>
+            </v-card-text>
+          </v-card>
+        </v-container>
+        <v-container v-else-if=\"node\">
+          <div class=\"d-flex align-center mb-2\">
+            <h1 class=\"text-h4\">{{ node.name }}</h1>
+            <v-chip size=\"small\" class=\"ml-3\" color=\"indigo\" variant=\"outlined\">{{ node.symbol }}</v-chip>
+            <v-btn
+              class=\"ml-3\"
+              size=\"small\"
+              variant=\"tonal\"
+              :color=\"testColor\"
+              :loading=\"testLoading\"
+              @click=\"runTests\"
+              prepend-icon=\"mdi-play-circle-outline\"
+            >{{ testLabel }}</v-btn>
+          </div>
+          <v-alert v-if=\"testResult\" :type=\"testResult.failed === 0 ? 'success' : 'error'\" variant=\"tonal\" density=\"compact\" class=\"mb-4\" closable @click:close=\"testResult = null\">
+            <strong>{{ testResult.passed }}/{{ testResult.total }} passed</strong>
+            <span v-if=\"testResult.failed > 0\">, {{ testResult.failed }} failed</span>
+          </v-alert>
+          <div v-if=\"testResult && testResult.failures.length > 0\" class=\"mb-4\">
+            <v-card v-for=\"f in testResult.failures\" :key=\"f.name\" variant=\"outlined\" color=\"error\" class=\"mb-2\">
+              <v-card-text>
+                <div class=\"font-weight-medium\">{{ f.name }}</div>
+                <div class=\"code-block mt-1\">{{ f.expr }}</div>
+                <div v-if=\"f.error\" class=\"text-error text-body-2 mt-1\">{{ f.error }}</div>
+              </v-card-text>
+            </v-card>
+          </div>
+          <p class=\"text-body-1 mb-4\">{{ node.description }}</p>
+          <div v-if=\"node.members\">
+            <h2 class=\"text-h6 mb-2\">Members</h2>
+            <v-card v-for=\"m in node.members\" :key=\"m.symbol\" variant=\"outlined\" class=\"mb-2\" @click=\"selectNode(m.symbol)\" style=\"cursor:pointer\">
+              <v-card-text>
+                <strong>{{ m.name }}</strong>
+                <div class=\"text-body-2 text-grey-darken-1\">{{ m.description }}</div>
+              </v-card-text>
+            </v-card>
+          </div>
+          <div v-if=\"node.concepts\">
+            <h2 class=\"text-h6 mb-2 mt-4\">Concepts</h2>
+            <v-card v-for=\"c in node.concepts\" :key=\"c.symbol\" variant=\"outlined\" class=\"mb-2\" @click=\"selectNode(c.symbol)\" style=\"cursor:pointer\">
+              <v-card-text>
+                <strong>{{ c.name }}</strong>
+                <div class=\"text-body-2 text-grey-darken-1\">{{ c.description }}</div>
+              </v-card-text>
+            </v-card>
+          </div>
+          <div v-if=\"node.examples\">
+            <h2 class=\"text-h6 mb-2\">Examples</h2>
+            <div v-for=\"ex in node.examples\" :key=\"ex.name\" class=\"mb-2\">
+              <div class=\"text-body-2 font-weight-medium\">{{ ex.name }}</div>
+              <div class=\"code-block\">{{ ex.expr }}</div>
+            </div>
+          </div>
+          <div v-if=\"node.tests\">
+            <h2 class=\"text-h6 mb-2 mt-4\">Tests</h2>
+            <div v-for=\"t in node.tests\" :key=\"t.name\" class=\"mb-2\">
+              <div class=\"text-body-2 font-weight-medium\">{{ t.name }}</div>
+              <div class=\"code-block\">{{ t.expr }}</div>
+            </div>
+          </div>
+          <div v-if=\"node.keywords\">
+            <h2 class=\"text-h6 mb-2 mt-4\">Keywords</h2>
+            <v-chip v-for=\"kw in node.keywords\" :key=\"kw\" size=\"small\" class=\"mr-1 mb-1\" color=\"grey\">{{ kw }}</v-chip>
+          </div>
+        </v-container>
+        <v-container v-else>
+          <p class=\"text-body-1 text-grey\">Select a type from the sidebar, or search above.</p>
+        </v-container>
+      </v-main>
+    </v-app>
+  </div>
+  <script>
+    const app = Vue.createApp({
+      data() {
+        return { tree: { children: [] }, node: null, selected: null, searchQuery: '', searchResults: null, lastSearch: '', testResult: null, testLoading: false }
+      },
+      computed: {
+        testLabel() {
+          if (this.testResult) return this.testResult.failed === 0 ? 'All passed' : this.testResult.failed + ' failed';
+          return 'Run Tests';
+        },
+        testColor() {
+          if (!this.testResult) return 'indigo';
+          return this.testResult.failed === 0 ? 'success' : 'error';
+        }
+      },
+      async mounted() {
+        const r = await fetch('/api/tree');
+        this.tree = await r.json();
+      },
+      methods: {
+        async selectNode(sym) {
+          this.selected = sym;
+          this.searchResults = null;
+          this.searchQuery = '';
+          this.testResult = null;
+          const r = await fetch('/api/node?s=' + encodeURIComponent(sym));
+          this.node = await r.json();
+        },
+        async doSearch() {
+          if (!this.searchQuery.trim()) return;
+          this.lastSearch = this.searchQuery;
+          this.selected = null;
+          this.node = null;
+          this.testResult = null;
+          const r = await fetch('/api/search?q=' + encodeURIComponent(this.searchQuery) + '&depth=1');
+          this.searchResults = await r.json();
+        },
+        clearSearch() {
+          this.searchResults = null;
+          this.searchQuery = '';
+        },
+        async runTests() {
+          if (!this.selected) return;
+          this.testLoading = true;
+          this.testResult = null;
+          const r = await fetch('/api/validate?s=' + encodeURIComponent(this.selected));
+          this.testResult = await r.json();
+          this.testLoading = false;
+        }
+      }
+    });
+    app.use(Vuetify.createVuetify());
+    app.mount('#app');
+  " se "
+</body>
+</html>"))))
+
+(define on-request (fn (req) (let (path (get req "path") method (get req "method") qs (parse-query (get req "query"))) (cond (eq path "/") (html-response (lang-ui-page)) (eq path "/api/tree") (json-response (lang-api-tree lang)) (eq path "/api/node") (let (sym (get qs "s") index (lang-node-index lang) node (get index sym)) (if (nil? node) (json-response (dict "error" "not found")) (json-response (lang-api-node node)))) (eq path "/api/search") (let (q (get qs "q") depth (if (nil? (get qs "depth")) 1 (from-json (get qs "depth")))) (json-response (lang-search q depth))) (eq path "/api/validate") (let (sym (get qs "s") index (lang-node-index lang) node (get index sym)) (if (nil? node) (json-response (dict "error" "not found")) (json-response (lang-validate node)))) true (dict "status" 404 "headers" (dict "Content-Type" "text/plain") "body" "Not Found")))))
+
