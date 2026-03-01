@@ -1,0 +1,52 @@
+(define route (fn (method path handler) (dict "method" method "path" path "handler" handler)))
+
+(define match-route (fn (req routes) (letrec ((go (fn (rs) (if (empty? rs) nil (let ((r (head rs))) (if (and (eq (get r "method") (get req "method")) (eq (get r "path") (get req "path"))) r (go (rest rs)))))))) (go routes))))
+
+(define dispatch (fn (req routes) (let ((matched (match-route req routes))) (if (nil? matched) (dict "status" 404 "headers" (dict "Content-Type" "text/plain") "body" "Not Found") ((get matched "handler") req)))))
+
+(define script-end (concat "<" "/script>"))
+
+(define html-page (fn (title body-html vue-data) (let ((se script-end)) (concat "<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=\"utf-8\">
+  <title>" title "</title>
+  <link href=\"https://cdn.jsdelivr.net/npm/vuetify@3/dist/vuetify.min.css\" rel=\"stylesheet\">
+  <link href=\"https://cdn.jsdelivr.net/npm/@mdi/font@7/css/materialdesignicons.min.css\" rel=\"stylesheet\">
+  <script src=\"https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js\">" se "
+  <script src=\"https://cdn.jsdelivr.net/npm/vuetify@3/dist/vuetify.min.js\">" se "
+</head>
+<body>
+  <div id=\"app\">
+    <v-app>" body-html "</v-app>
+  </div>
+  <script>
+    const app = Vue.createApp({
+      data() { return " (to-json vue-data) " }
+    });
+    app.use(Vuetify.createVuetify());
+    app.mount('#app');
+  " se "
+</body>
+</html>"))))
+
+(define html-response (fn (body) (dict "status" 200 "headers" (dict "Content-Type" "text/html; charset=utf-8") "body" body)))
+
+(define json-response (fn (data) (dict "status" 200 "headers" (dict "Content-Type" "application/json") "body" (to-json data))))
+
+(define v-app-bar (fn (title icon) (concat "<v-app-bar color=\"primary\" title=\"" title "\"><template v-slot:prepend><v-icon>" icon "</v-icon></template></v-app-bar>")))
+
+(define v-chip (fn (label color) (concat "<v-chip color=\"" color "\" size=\"small\">" label "</v-chip>")))
+
+(define v-card (fn (title subtitle body-html) (concat "<v-card title=\"" title "\"" (if (nil? subtitle) "" (concat " subtitle=\"" subtitle "\"")) "><v-card-text>" body-html "</v-card-text></v-card>")))
+
+(define v-list-item (fn (title subtitle icon) (concat "<v-list-item" (if (nil? icon) "" (concat " prepend-icon=\"" icon "\"")) " title=\"" title "\"" (if (nil? subtitle) "" (concat " subtitle=\"" subtitle "\"")) "></v-list-item>")))
+
+(define v-list (fn (items) (concat "<v-list>" (fold concat "" items) "</v-list>")))
+
+(define v-container (fn (body) (concat "<v-main><v-container>" body "</v-container></v-main>")))
+
+(define v-row (fn (cols) (concat "<v-row>" (fold concat "" cols) "</v-row>")))
+
+(define v-col (fn (width body) (concat "<v-col cols=\"" (to-string width) "\">" body "</v-col>")))
+
