@@ -184,3 +184,125 @@
 
 (define lang (dict "symbol" "lang" "name" "Logos Language Reference" "description" "Self-validating language reference for the logos programming environment." "members" (list lang-types)))
 
+(define lang-ex-if-basic (dict :name "basic conditional" :expr "(eq (if true :yes :no) :yes)"))
+
+(define lang-ex-if-no-else (dict :name "if without else returns nil" :expr "(eq (if false :yes) nil)"))
+
+(define lang-test-if-truthy (dict :name "truthy values take then branch" :expr "(eq (if 42 :yes :no) :yes)"))
+
+(define lang-test-if-nested (dict :name "nested if" :expr "(eq (if true (if false :a :b) :c) :b)"))
+
+(define lang-test-if-nil-falsy (dict :name "nil takes else branch" :expr "(eq (if nil :yes :no) :no)"))
+
+(define lang-ex-let-basic (dict :name "basic let binding" :expr "(eq (let (x 10) (add x 1)) 11)"))
+
+(define lang-ex-let-nested (dict :name "nested let bindings" :expr "(eq (let (x 1) (let (y 2) (add x y))) 3)"))
+
+(define lang-test-let-shadow (dict :name "inner let shadows outer" :expr "(eq (let (x 1) (let (x 2) x)) 2)"))
+
+(define lang-test-let-body-single (dict :name "let takes one body expr, use do for multiple" :expr "(eq (let (x 1) (do (add x 1) (add x 2))) 3)"))
+
+(define lang-ex-letrec-factorial (dict :name "recursive factorial" :expr "(eq (letrec (fact (fn (n) (if (le n 1) 1 (mul n (fact (sub n 1)))))) (fact 5)) 120)"))
+
+(define lang-ex-letrec-sequential (dict :name "sequential bindings" :expr "(eq (letrec (x 10 y (add x 5)) y) 15)"))
+
+(define lang-test-letrec-mutual (dict :name "mutual recursion" :expr "(eq (letrec (even? (fn (n) (if (eq n 0) true (odd? (sub n 1)))) odd? (fn (n) (if (eq n 0) false (even? (sub n 1))))) (and (even? 4) (odd? 3))) true)"))
+
+(define lang-test-letrec-later-uses-earlier (dict :name "later bindings see earlier ones" :expr "(eq (letrec (a 1 b (add a 1) c (add b 1)) c) 3)"))
+
+(define lang-ex-do-sequence (dict :name "sequential evaluation returns last" :expr "(eq (do 1 2 3) 3)"))
+
+(define lang-ex-do-with-let (dict :name "do enables multiple exprs in let body" :expr "(eq (let (x 5) (do (add x 1) (add x 2))) 7)"))
+
+(define lang-test-do-single (dict :name "single expression" :expr "(eq (do 42) 42)"))
+
+(define lang-test-do-nested (dict :name "nested do" :expr "(eq (do (do 1 2) (do 3 4)) 4)"))
+
+(define lang-ex-fn-basic (dict :name "create and call a function" :expr "(eq ((fn (x y) (add x y)) 3 4) 7)"))
+
+(define lang-ex-fn-closure (dict :name "closures capture enclosing scope" :expr "(let (make-adder (fn (n) (fn (x) (add x n)))) (eq ((make-adder 10) 5) 15))"))
+
+(define lang-test-fn-zero-args (dict :name "zero-arg function" :expr "(eq ((fn () 42)) 42)"))
+
+(define lang-test-fn-rest-params (dict :name "rest params collect remaining args" :expr "(eq ((fn (a & rest) rest) 1 2 3) (list 2 3))"))
+
+(define lang-test-fn-higher-order (dict :name "functions as arguments" :expr "(eq (map (fn (x) (mul x x)) (list 1 2 3)) (list 1 4 9))"))
+
+(define lang-ex-form-custom-when (dict :name "custom control flow with form" :expr "(let (my-when (form (test body) (list 'if test body nil))) (eq (my-when true :yes) :yes))"))
+
+(define lang-ex-form-short-circuit (dict :name "forms enable short-circuit evaluation" :expr "(do (or true (assert false \"not reached\")) true)"))
+
+(define lang-test-form-type (dict :name "form creates a form value" :expr "(eq (type (form (x) x)) :form)"))
+
+(define lang-test-form-rest-params (dict :name "form with rest params" :expr "(let (my-list (form (& args) (cons 'list args))) (eq (my-list 1 2 3) (list 1 2 3)))"))
+
+(define lang-ex-quote-symbol (dict :name "quote creates symbol values" :expr "(eq (type 'foo) :symbol)"))
+
+(define lang-ex-quote-list (dict :name "quote prevents evaluation of lists" :expr "(eq (quote (1 2 3)) (list 1 2 3))"))
+
+(define lang-test-quote-equality (dict :name "quoted symbols are equal by name" :expr "(eq 'hello 'hello)"))
+
+(define lang-test-quote-to-string (dict :name "symbol to string" :expr "(eq (to-string 'my-name) \"my-name\")"))
+
+(define lang-ex-apply-basic (dict :name "apply a function to a list of args" :expr "(eq (apply add (list 3 4)) 7)"))
+
+(define lang-ex-apply-user-fn (dict :name "apply with user-defined function" :expr "(let (sum3 (fn (a b c) (add a (add b c)))) (eq (apply sum3 (list 1 2 3)) 6))"))
+
+(define lang-test-apply-builtin (dict :name "apply works on builtins" :expr "(eq (apply concat (list \"hello\" \" \" \"world\")) \"hello world\")"))
+
+(define lang-test-apply-empty (dict :name "apply with empty list" :expr "(eq (apply list (list)) (list))"))
+
+(define lang-ex-sort-by-identity (dict :name "sort numbers" :expr "(eq (sort-by (fn (x) x) (list 3 1 4 1 5)) (list 1 1 3 4 5))"))
+
+(define lang-ex-sort-by-field (dict :name "sort records by field" :expr "(eq (map (fn (r) (get r :name)) (sort-by (fn (r) (get r :age)) (list (dict :name \"b\" :age 30) (dict :name \"a\" :age 20)))) (list \"a\" \"b\"))"))
+
+(define lang-test-sort-by-strings (dict :name "sort strings alphabetically" :expr "(eq (sort-by (fn (x) x) (list \"cherry\" \"apple\" \"banana\")) (list \"apple\" \"banana\" \"cherry\"))"))
+
+(define lang-test-sort-by-empty (dict :name "sort empty list" :expr "(eq (sort-by (fn (x) x) (list)) (list))"))
+
+(define lang-form-if (dict :symbol "lang-form-if" :name "if" :description "Conditional branching. (if test then else). Evaluates test — if truthy, evaluates and returns then; if falsy, evaluates and returns else. The else branch is optional and defaults to nil. Non-eager: only the chosen branch is evaluated. See lang-concept-truthy for what counts as truthy/falsy." :keywords (list "conditional" "branch" "ternary" "if-then-else" "guard" "predicate" "control flow") :examples (list lang-ex-if-basic lang-ex-if-no-else) :tests (list lang-test-if-truthy lang-test-if-nested lang-test-if-nil-falsy)))
+
+(define lang-form-let (dict :symbol "lang-form-let" :name "let" :description "Local binding. (let (name value) body). Binds name to value in a new scope, then evaluates body in that scope. Takes exactly one binding pair and one body expression — use nested let for multiple bindings, use do for multiple body expressions. The binding is not visible to the value expression (use letrec for self-reference)." :keywords (list "binding" "local variable" "scope" "name" "assignment" "temporary" "block") :examples (list lang-ex-let-basic lang-ex-let-nested) :tests (list lang-test-let-shadow lang-test-let-body-single)))
+
+(define lang-form-letrec (dict :symbol "lang-form-letrec" :name "letrec" :description "Sequential bindings with recursion support. (letrec (a expr-a b expr-b ...) body). Like let but takes multiple binding pairs processed sequentially — later bindings can reference earlier ones. Supports self-recursion and mutual recursion via closure back-patching. The primary way to define local recursive functions." :keywords (list "recursive binding" "mutual recursion" "self-reference" "sequential binding" "local recursion" "closure" "back-patching") :examples (list lang-ex-letrec-factorial lang-ex-letrec-sequential) :tests (list lang-test-letrec-mutual lang-test-letrec-later-uses-earlier)))
+
+(define lang-form-do (dict :symbol "lang-form-do" :name "do" :description "Sequential evaluation. (do expr1 expr2 ... exprN). Evaluates all expressions in order and returns the value of the last one. Used to sequence multiple expressions where only one is expected — for example, inside a let body or an if branch. The primary way to combine side effects with a return value." :keywords (list "sequence" "block" "begin" "progn" "multiple expressions" "side effects" "imperative") :examples (list lang-ex-do-sequence lang-ex-do-with-let) :tests (list lang-test-do-single lang-test-do-nested)))
+
+(define lang-form-fn (dict :symbol "lang-form-fn" :name "fn" :description "Function creation. (fn (params) body). Creates a function value (closure). Non-eager — the body is not evaluated until the function is called. Params is a list of parameter names. Rest params with & collect remaining arguments: (fn (a & rest) body). The body is a single expression (use do for multiple). Functions close over their lexical scope at creation time. See lang-type-fn for the function type." :keywords (list "function" "lambda" "closure" "create function" "define function" "parameters" "rest params" "abstraction") :examples (list lang-ex-fn-basic lang-ex-fn-closure) :tests (list lang-test-fn-zero-args lang-test-fn-rest-params lang-test-fn-higher-order)))
+
+(define lang-form-form (dict :symbol "lang-form-form" :name "form" :description "Form (fexpr) creation. (form (params) body). Like fn but receives unevaluated AST as logos data — symbols, lists, and literals are passed as-is without evaluation. The body returns an expansion value, which is converted back to AST and evaluated in the caller's scope. This enables user-defined control flow: short-circuit logic, multi-way branching, conditional execution. Supports rest params with &. See lang-type-form for the form type." :keywords (list "macro" "fexpr" "metaprogramming" "syntax extension" "unevaluated" "expansion" "AST" "control flow") :examples (list lang-ex-form-custom-when lang-ex-form-short-circuit) :tests (list lang-test-form-type lang-test-form-rest-params)))
+
+(define lang-form-quote (dict :symbol "lang-form-quote" :name "quote" :description "Prevents evaluation. (quote x) or the shorthand 'x. When applied to a name, creates a symbol value instead of resolving it as a graph reference. When applied to a list, returns the list as data without evaluating it as a function call. The reader macro ' is syntactic sugar for quote: 'foo expands to (quote foo). Symbols created by quote are inert data — they can be compared, converted to strings, and used in metaprogramming." :keywords (list "quote" "symbol" "prevent evaluation" "literal" "tick" "reader macro" "unevaluated" "data") :examples (list lang-ex-quote-symbol lang-ex-quote-list) :tests (list lang-test-quote-equality lang-test-quote-to-string)))
+
+(define lang-form-apply (dict :symbol "lang-form-apply" :name "apply" :description "Applies a function to a list of arguments. (apply fn args-list). Spreads the list as positional arguments to the function. Works with fn, form, and builtin values. Useful when arguments are computed as a list at runtime. The args-list must be a list — apply unpacks it into individual arguments for the call." :keywords (list "apply" "spread" "call with list" "unpack" "variadic" "dynamic call" "splat") :examples (list lang-ex-apply-basic lang-ex-apply-user-fn) :tests (list lang-test-apply-builtin lang-test-apply-empty)))
+
+(define lang-form-sort-by (dict :symbol "lang-form-sort-by" :name "sort-by" :description "Sorts a list using a key function. (sort-by key-fn list). Applies key-fn to each element to extract a sort key, then sorts by those keys using universal ordering (all types are comparable via lt/gt). Returns a new sorted list — the original is unchanged. The key function is called once per element. Works with any comparable key type: numbers, strings, keywords." :keywords (list "sort" "order" "compare" "rank" "arrange" "key function" "ascending" "collection") :examples (list lang-ex-sort-by-identity lang-ex-sort-by-field) :tests (list lang-test-sort-by-strings lang-test-sort-by-empty)))
+
+(define lang-forms (dict :symbol "lang-forms" :name "Core Forms" :description "The 9 core forms are non-eager evaluation rules built into the evaluator. Unlike builtins (which receive already-evaluated arguments), forms control when and whether their arguments are evaluated. They provide conditional branching (if), local bindings (let, letrec), sequencing (do), abstraction (fn, form), data quotation (quote), dynamic dispatch (apply), and ordering (sort-by)." :keywords (list "special forms" "core forms" "non-eager" "evaluation rules" "syntax" "control flow" "language primitives") :members (list lang-form-if lang-form-let lang-form-letrec lang-form-do lang-form-fn lang-form-form lang-form-quote lang-form-apply lang-form-sort-by)))
+
+(define lang (dict :symbol "lang" :name "Logos Language Reference" :description "Self-validating language reference for the logos programming environment." :members (list lang-types lang-forms)))
+
+(define lang-ex-if-no-else (dict :name "else branch provides a default" :expr "(eq (if false :yes nil) nil)"))
+
+(define lang-form-if (dict :symbol "lang-form-if" :name "if" :description "Conditional branching. (if test then else). Evaluates test — if truthy, evaluates and returns then; if falsy, evaluates and returns else. All three arguments are required. Non-eager: only the chosen branch is evaluated. Use nil as the else branch when no alternative is needed. See lang-concept-truthy for what counts as truthy/falsy." :keywords (list "conditional" "branch" "ternary" "if-then-else" "guard" "predicate" "control flow") :examples (list lang-ex-if-basic lang-ex-if-no-else) :tests (list lang-test-if-truthy lang-test-if-nested lang-test-if-nil-falsy)))
+
+(define lang (dict :symbol "lang" :name "Logos Language Reference" :description "Self-validating language reference for the logos programming environment." :members (list lang-types lang-forms)))
+
+(define lang-forms (dict :symbol "lang-forms" :name "Core Forms" :description "The 9 core forms are non-eager evaluation rules built into the evaluator. Unlike builtins (which receive already-evaluated arguments), forms control when and whether their arguments are evaluated. They provide conditional branching (if), local bindings (let, letrec), sequencing (do), abstraction (fn, form), data quotation (quote), dynamic dispatch (apply), and ordering (sort-by)." :keywords (list "special forms" "core forms" "non-eager" "evaluation rules" "syntax" "control flow" "language primitives") :members (list lang-form-if lang-form-let lang-form-letrec lang-form-do lang-form-fn lang-form-form lang-form-quote lang-form-apply lang-form-sort-by)))
+
+(define lang (dict :symbol "lang" :name "Logos Language Reference" :description "Self-validating language reference for the logos programming environment." :members (list lang-types lang-forms)))
+
+(define lang-form-if (dict :symbol "lang-form-if" :name "if" :description "Conditional branching. (if test then else). Evaluates test — if truthy, evaluates and returns then; if falsy, evaluates and returns else. All three arguments are required. Non-eager: only the chosen branch is evaluated. Use nil as the else branch when no alternative is needed. See lang-concept-truthy for what counts as truthy/falsy." :keywords (list "conditional" "branch" "ternary" "if-then-else" "guard" "predicate" "control flow") :examples (list lang-ex-if-basic lang-ex-if-no-else) :tests (list lang-test-if-truthy lang-test-if-nested lang-test-if-nil-falsy)))
+
+(define lang-forms (dict :symbol "lang-forms" :name "Core Forms" :description "The 9 core forms are non-eager evaluation rules built into the evaluator. Unlike builtins (which receive already-evaluated arguments), forms control when and whether their arguments are evaluated. They provide conditional branching (if), local bindings (let, letrec), sequencing (do), abstraction (fn, form), data quotation (quote), dynamic dispatch (apply), and ordering (sort-by)." :keywords (list "special forms" "core forms" "non-eager" "evaluation rules" "syntax" "control flow" "language primitives") :members (list lang-form-if lang-form-let lang-form-letrec lang-form-do lang-form-fn lang-form-form lang-form-quote lang-form-apply lang-form-sort-by)))
+
+(define lang-form-fn (dict :symbol "lang-form-fn" :name "fn" :description "Function creation. (fn (params) body). Creates a function value (closure). Non-eager — the body is not evaluated until the function is called. Params is a list of parameter names. Rest params with & collect remaining arguments: (fn (a & rest) body). The body is a single expression (use do for multiple). Functions close over their lexical scope at creation time." :keywords (list "function" "lambda" "closure" "create function" "define function" "parameters" "rest params" "abstraction") :examples (list lang-ex-fn-basic lang-ex-fn-closure) :tests (list lang-test-fn-zero-args lang-test-fn-rest-params lang-test-fn-higher-order) :see-also (list lang-type-fn)))
+
+(define lang-form-form (dict :symbol "lang-form-form" :name "form" :description "Form (fexpr) creation. (form (params) body). Like fn but receives unevaluated AST as logos data — symbols, lists, and literals are passed as-is without evaluation. The body returns an expansion value, which is converted back to AST and evaluated in the caller's scope. This enables user-defined control flow: short-circuit logic, multi-way branching, conditional execution. Supports rest params with &." :keywords (list "macro" "fexpr" "metaprogramming" "syntax extension" "unevaluated" "expansion" "AST" "control flow") :examples (list lang-ex-form-custom-when lang-ex-form-short-circuit) :tests (list lang-test-form-type lang-test-form-rest-params) :see-also (list lang-type-form)))
+
+(define lang-form-quote (dict :symbol "lang-form-quote" :name "quote" :description "Prevents evaluation. (quote x) or the shorthand 'x. When applied to a name, creates a symbol value instead of resolving it as a graph reference. When applied to a list, returns the list as data without evaluating it as a function call. The reader macro ' is syntactic sugar for quote: 'foo expands to (quote foo). Symbols created by quote are inert data — they can be compared, converted to strings, and used in metaprogramming." :keywords (list "quote" "symbol" "prevent evaluation" "literal" "tick" "reader macro" "unevaluated" "data") :examples (list lang-ex-quote-symbol lang-ex-quote-list) :tests (list lang-test-quote-equality lang-test-quote-to-string) :see-also (list lang-type-symbol)))
+
+(define lang (dict :symbol "lang" :name "Logos Language Reference" :description "Self-validating language reference for the logos programming environment." :members (list lang-types lang-forms)))
+
+(define lang-forms (dict :symbol "lang-forms" :name "Core Forms" :description "The 9 core forms are non-eager evaluation rules built into the evaluator. Unlike builtins (which receive already-evaluated arguments), forms control when and whether their arguments are evaluated. They provide conditional branching (if), local bindings (let, letrec), sequencing (do), abstraction (fn, form), data quotation (quote), dynamic dispatch (apply), and ordering (sort-by)." :keywords (list "special forms" "core forms" "non-eager" "evaluation rules" "syntax" "control flow" "language primitives") :members (list lang-form-if lang-form-let lang-form-letrec lang-form-do lang-form-fn lang-form-form lang-form-quote lang-form-apply lang-form-sort-by)))
+

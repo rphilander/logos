@@ -2,21 +2,23 @@
 
 ## What Was Built
 
-A `lang` library (`data/lang.logos`) containing a self-validating language reference for logos types.
+A `lang` library (`data/lang.logos`) containing a self-validating language reference for logos.
 
 ### Structure
 - **`lang`** root node — top-level entry point for the whole reference
 - **`lang-types`** — 13 type nodes + 2 concept nodes, with `members` and `concepts` as direct graph references
-- **68 example/test nodes** (`lang-ex-*` for examples, `lang-test-*` for tests)
+- **`lang-forms`** — 9 core form nodes, with `members` as direct graph references
+- **106 example/test nodes** (`lang-ex-*` for examples, `lang-test-*` for tests)
 - **Functions**: `lang-validate`, `lang-describe`, `lang-search`, `lang-run-test`, `lang-collect-tests`
 
 ### Conventions
 - Each reference node has: `"symbol"` (own symbol name), `"name"` (short label), `"description"` (explanation), `"keywords"` (list of lowercase search terms), `"examples"` (direct refs to example nodes), `"tests"` (direct refs to test nodes)
+- Optional `"see-also"` field: list of direct graph references to semantically related nodes (e.g., `lang-form-fn` → `lang-type-fn`). Makes cross-references explicit and visible to graph introspection.
 - Example/test nodes have: `"name"` (short label), `"expr"` (string that evaluates to true/false)
 - Top-level nodes have `"members"` and `"concepts"` as direct graph references to child nodes
 - `(lang-validate node)` runs all examples + tests recursively, returns `{total, passed, failed, failures}`
 - `(lang-describe node)` returns brief markdown; `(lang-describe node :full)` returns full recursive markdown
-- `(lang-search query)` searches names, descriptions, and keywords. Optional depth (0-3) controls result detail. Optional roots list scopes the search: `(lang-search "lambda" 2 (list 'lang-types))`
+- `(lang-search query)` searches names, descriptions, and keywords. Optional depth (0-3) controls result detail. Optional roots list scopes the search: `(lang-search "lambda" 0 (list lang-forms))`
 
 ## Issues Found
 
@@ -39,9 +41,12 @@ This works but is heavyweight — spinning up the step evaluator just to derefer
 ### 5. `let` takes exactly one body expression
 `(let (x 1) expr1 expr2)` fails. Need `(let (x 1) (do expr1 expr2))`. This is by design but tripped up test writing.
 
+### 6. `if` requires all three arguments
+`(if false :yes)` fails with "expected 3 args (cond then else), got 2". Unlike many Lisps, the else branch is not optional. Use `nil` explicitly: `(if false :yes nil)`. Discovered via self-validation during the forms section build.
+
 ## Still To Build (lang library)
 
-- **Core forms** section: `if`, `let`, `letrec`, `do`, `fn`, `form`, `quote`, `apply`, `sort-by`
+- ~~**Core forms** section~~ ✓ — 9 forms, 38 tests, all passing
 - **Builtins** section: all 31, grouped by category
 - **Syntax** section: S-expressions, quote reader macro, keyword syntax, rest params
 - **Concepts** section: closures, recursion, TCO, scoping, graph resolution
@@ -95,6 +100,19 @@ When you redefine a symbol, the response is just `{name, node_id}`. It should al
 
 ### 7. The vision works
 Redefine a function → refresh → live website updates. No build, no deploy. The loop from "I want search" to "search is live in the browser" happened in one conversation. Zero source files written — only the library log.
+
+## Observations from Building Core Forms
+
+### 1. Parallel defines with dependencies can cause stale references
+When redefining `lang-ex-if-no-else` and `lang-form-if` in parallel (same message, two MCP calls), the ordering is not guaranteed. If `lang-form-if` was processed first, its expression resolved `lang-ex-if-no-else` to the **old** node because the new one hadn't been committed yet. The subsequent `refresh-all` with both as targets didn't fix it — `lang-form-if` was treated as a target ("already current") rather than a dependent needing re-resolution.
+
+**Rule:** When redefining nodes that reference each other, define the dependency first, then the dependent. Or: define both in any order, then refresh the leaf target only — the dependent will be re-resolved as part of the refresh chain.
+
+### 2. `refresh-all` targets vs dependents
+A target in `refresh-all` means "I am already correct — re-resolve things that depend on me." If a symbol is listed as a target but is actually stale, it won't be fixed. To fix it, it must appear as a **dependent** of some target. This distinction matters when multiple related symbols change at once.
+
+### 3. `see-also` cross-references
+Established a convention for explicit semantic links between related nodes. Three form→type links: `lang-form-fn` → `lang-type-fn`, `lang-form-form` → `lang-type-form`, `lang-form-quote` → `lang-type-symbol`. These are real graph references visible to `ref-by`, `dependents`, `downstream`.
 
 ## Enhancements (after lang library is complete)
 
