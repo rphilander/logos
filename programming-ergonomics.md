@@ -94,19 +94,17 @@ The AST-level diff/patch idea could resolve this tension — define small functi
 
 ## Arg Order and Arity Pitfalls
 
-### `append` is strictly binary
-`append` takes exactly 2 list arguments. Calling `(append a b c)` does not produce a clear arity error — instead, excess args may be silently misinterpreted, producing confusing downstream errors like `len: expected List or Map, got String`. Chain calls instead: `(append (append a b) c)`.
+### ~~`append` is strictly binary~~ FIXED
+`append` now accepts 2+ list arguments: `(append a b c)` works. Fixed in `1498fca`.
 
 ### `member?` arg order: list first
 `member?` takes `(xs x)` — list first, element second. Writing `(member? item list)` passes the item (often a string) as the list to iterate, which triggers `(empty? str)` → `(len str)` → `len: expected List or Map, got String`. The fix is `(member? list item)`.
 
-### `and`/`or` take exactly 2 args
-`and` and `or` are user-defined forms (in base library), not variadic. Writing `(and a b c)` produces `form: expected 2 args, got 3`. Nest instead: `(and (and a b) c)` or `(and a (and b c))`. Same for `or`.
+### ~~`and`/`or` take exactly 2 args~~ FIXED
+`and` and `or` now accept 2+ args via `& rest` params. Fixed in `f194788`.
 
-### Fuel defaults and explicit limits
-The global fuel default is 0 (unlimited). This means passing an explicit low `fuel` parameter to `logos_eval` can cause unnecessary `fuel exhausted` errors on functions that do real work (batch operations, tree walks with module calls). `arch-validate` needed ~100k+ steps for 63 anchors.
-
-**Open question:** Should we set a reasonable global default (e.g., 500k) as a safety net against runaway evaluation, rather than leaving it unlimited? Currently unlimited means a bug could hang the system indefinitely. A high default would catch runaways while still allowing complex operations.
+### ~~Fuel defaults and explicit limits~~ FIXED
+Global fuel default set to 500k in `ab1fb73`.
 
 ### General pattern
 Both pitfalls produce the same opaque error (`len: expected List or Map, got String`) far from the actual mistake. When this error appears, check:

@@ -34,6 +34,10 @@
 
 (define empty? (fn (xs) (eq (len xs) 0)))
 
+(define fold (fn (f acc xs) (loop ((acc acc) (xs xs)) (if (empty? xs) acc (recur (f acc (head xs)) (rest xs))))))
+
+(define reverse (fn (xs) (fold (fn (acc x) (cons x acc)) (list) xs)))
+
 (define and (form (first & rest) (if (empty? rest) first (fold (fn (acc x) (list (quote if) acc x false)) first rest))))
 
 (define or (form (first & rest) (if (empty? rest) first (let (rev (reverse (cons first rest))) (fold (fn (acc x) (list (quote let) (list (quote __or__) x) (list (quote if) (quote __or__) (quote __or__) acc))) (head rev) (rest rev))))))
@@ -41,10 +45,6 @@
 (define when (form (test body) (list (quote if) test body nil)))
 
 (define unless (form (test body) (list (quote if) test nil body)))
-
-(define fold (fn (f acc xs) (loop ((acc acc) (xs xs)) (if (empty? xs) acc (recur (f acc (head xs)) (rest xs))))))
-
-(define reverse (fn (xs) (fold (fn (acc x) (cons x acc)) (list) xs)))
 
 (define cond (form (& pairs) (let (rev (reverse pairs) expanded (loop ((ps rev) (result (quote nil))) (if (empty? ps) result (recur (rest (rest ps)) (list (quote if) (nth ps 1) (head ps) result))))) expanded)))
 
