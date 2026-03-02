@@ -13,11 +13,38 @@ type Ref struct {
 	NodeID string
 }
 
+// SymbolStatus tracks the contract state of a symbol.
+type SymbolStatus int
+
+const (
+	StatusUntested SymbolStatus = iota // no contract (no tests)
+	StatusGreen                        // has contract, all deps current, tests pass
+	StatusRed                          // has contract, stale deps (pinned to old version)
+)
+
+func (s SymbolStatus) String() string {
+	switch s {
+	case StatusGreen:
+		return "green"
+	case StatusRed:
+		return "red"
+	default:
+		return "untested"
+	}
+}
+
+type GraphNodeTest struct {
+	Name   string // label for identification
+	Source string // original test expression source
+	Expr   *Node  // resolved test AST (builtins + base + self only)
+}
+
 type GraphNode struct {
 	ID     string
 	Expr   *Node
 	Refs   []Ref
 	Source string
+	Tests  []GraphNodeTest // optional: contract tests
 }
 
 type Graph struct {
@@ -27,9 +54,10 @@ type Graph struct {
 	eval         *Evaluator
 	dir          string
 	logFile      *os.File
-	activeLib    string            // "" = session, else library name
-	libraries    []string          // ordered library names from manifest
-	symbolOwner  map[string]string // symbol name → library name ("" = session)
+	activeLib    string                  // "" = session, else library name
+	libraries    []string                // ordered library names from manifest
+	symbolOwner  map[string]string       // symbol name → library name ("" = session)
+	symbolStatus map[string]SymbolStatus // symbol name → green/red/untested
 }
 
 // coreFormKeywords are symbols that should not be resolved during define.
@@ -72,6 +100,7 @@ func NewGraph(dir string, builtins map[string]Builtin) (*Graph, error) {
 		symbols:      make(map[string]string),
 		nameCounters: make(map[string]int),
 		symbolOwner:  make(map[string]string),
+		symbolStatus: make(map[string]SymbolStatus),
 		dir:          dir,
 	}
 
@@ -99,6 +128,16 @@ func NewGraph(dir string, builtins map[string]Builtin) (*Graph, error) {
 
 	if err := g.replayFile(g.sessionLogPath(), ""); err != nil {
 		return nil, fmt.Errorf("replay session: %w", err)
+	}
+
+	// Set initial symbol status after replay: Green if tests exist, Untested otherwise
+	for name, nodeID := range g.symbols {
+		node := g.nodes[nodeID]
+		if len(node.Tests) > 0 {
+			g.symbolStatus[name] = StatusGreen
+		} else {
+			g.symbolStatus[name] = StatusUntested
+		}
 	}
 
 	f, err := os.OpenFile(g.sessionLogPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -135,7 +174,19 @@ func (g *Graph) resolveNode(nodeID string) (*Node, error) {
 	return node.Expr, nil
 }
 
+// TestInput represents a test to attach to a symbol during define.
+type TestInput struct {
+	Name string // label for identification
+	Expr string // test expression source
+}
+
 func (g *Graph) Define(name, expr string) (*GraphNode, error) {
+	return g.DefineWithTests(name, expr, nil)
+}
+
+// DefineWithTests creates or redefines a symbol, optionally with tests.
+// Tests are a gate: all must pass or the define fails.
+func (g *Graph) DefineWithTests(name, expr string, tests []TestInput) (*GraphNode, error) {
 	if strings.Contains(name, ":") {
 		return nil, fmt.Errorf("define: symbol name cannot contain ':': %s", name)
 	}
@@ -177,15 +228,271 @@ func (g *Graph) Define(name, expr string) (*GraphNode, error) {
 		Refs:   refs,
 		Source: expr,
 	}
+
+	// If tests provided, resolve and evaluate them as a gate.
+	if len(tests) > 0 {
+		// Temporarily add node to graph so tests can reference it
+		g.nodes[node.ID] = node
+		oldNodeID := g.symbols[name]
+		g.symbols[name] = node.ID
+		oldOwner, hadOwner := g.symbolOwner[name]
+		g.symbolOwner[name] = g.activeLib
+
+		var resolvedTests []GraphNodeTest
+		var gateErr error
+
+		for _, ti := range tests {
+			parsedTest, parseErr := Parse(ti.Expr)
+			if parseErr != nil {
+				gateErr = fmt.Errorf("define %s: parse test %q: %w", name, ti.Name, parseErr)
+				break
+			}
+			resolvedTest, resolveErr := g.resolveTestAST(parsedTest, name, nil)
+			if resolveErr != nil {
+				gateErr = fmt.Errorf("define %s: resolve test %q: %w", name, ti.Name, resolveErr)
+				break
+			}
+
+			// Evaluate the test with a separate fuel budget
+			savedFuel := g.eval.Fuel
+			savedFuelSet := g.eval.FuelSet
+			g.eval.Fuel = 100000
+			g.eval.FuelSet = true
+			result, evalErr := g.eval.Eval(resolvedTest)
+			g.eval.Fuel = savedFuel
+			g.eval.FuelSet = savedFuelSet
+
+			if evalErr != nil {
+				gateErr = fmt.Errorf("define %s: test %q failed: %w", name, ti.Name, evalErr)
+				break
+			}
+			if !result.Truthy() {
+				gateErr = fmt.Errorf("define %s: test %q returned falsy: %s", name, ti.Name, result.String())
+				break
+			}
+
+			resolvedTests = append(resolvedTests, GraphNodeTest{
+				Name:   ti.Name,
+				Source: ti.Expr,
+				Expr:   resolvedTest,
+			})
+		}
+
+		if gateErr != nil {
+			// Roll back: restore old symbol state, remove orphan node
+			delete(g.nodes, node.ID)
+			if oldNodeID != "" {
+				g.symbols[name] = oldNodeID
+			} else {
+				delete(g.symbols, name)
+			}
+			if hadOwner {
+				g.symbolOwner[name] = oldOwner
+			} else {
+				delete(g.symbolOwner, name)
+			}
+			return nil, gateErr
+		}
+
+		node.Tests = resolvedTests
+	}
+
+	// Commit: store node and update symbol table
 	g.nodes[node.ID] = node
 	g.symbols[name] = node.ID
 	g.symbolOwner[name] = g.activeLib
+	if len(node.Tests) > 0 {
+		g.symbolStatus[name] = StatusGreen
+	} else {
+		g.symbolStatus[name] = StatusUntested
+	}
 
+	// Write define entry to log
 	if err := g.appendLog(fmt.Sprintf("(define %s %s)", name, expr)); err != nil {
 		return nil, fmt.Errorf("write log: %w", err)
 	}
+	// Write test entries to log
+	for _, test := range node.Tests {
+		if err := g.appendLog(formatTestEntry(name, test)); err != nil {
+			return nil, fmt.Errorf("write test log: %w", err)
+		}
+	}
 
 	return node, nil
+}
+
+// Refine creates a new node for an existing symbol by applying deltas.
+// newExpr is the new expression (empty string = carry forward current).
+// addTests are tests to add. removeTests are test names to remove.
+// Returns the new node, a propagation flag, and any error.
+// Propagation is suppressed when both expression and tests change simultaneously.
+func (g *Graph) Refine(name, newExpr string, addTests []TestInput, removeTests []string) (*GraphNode, bool, error) {
+	// Look up current node
+	nodeID, ok := g.symbols[name]
+	if !ok {
+		return nil, false, fmt.Errorf("refine: unknown symbol: %s", name)
+	}
+
+	// Guard rail: check symbol ownership
+	if owner, exists := g.symbolOwner[name]; exists && owner != g.activeLib {
+		if owner == "" {
+			return nil, false, fmt.Errorf("refine: %s is defined in session; close the library to modify it", name)
+		}
+		return nil, false, fmt.Errorf("refine: %s is defined in library %q; open that library to modify it", name, owner)
+	}
+
+	currentNode := g.nodes[nodeID]
+
+	// Determine what changes
+	exprChanged := newExpr != ""
+	testsChanged := len(addTests) > 0 || len(removeTests) > 0
+
+	if !exprChanged && !testsChanged {
+		return nil, false, fmt.Errorf("refine %s: no changes specified", name)
+	}
+
+	// Determine expression: carry forward or use new
+	var exprResolved *Node
+	var exprRefs []Ref
+	exprSource := currentNode.Source
+
+	if exprChanged {
+		exprSource = newExpr
+		parsed, err := Parse(exprSource)
+		if err != nil {
+			return nil, false, fmt.Errorf("refine %s: parse: %w", name, err)
+		}
+		resolved, resolveErr := g.resolveAST(parsed, &exprRefs, nil)
+		if resolveErr != nil {
+			return nil, false, fmt.Errorf("refine %s: %w", name, resolveErr)
+		}
+		exprResolved = resolved
+	} else {
+		// Carry forward expression from current node
+		exprResolved = currentNode.Expr
+		exprRefs = make([]Ref, len(currentNode.Refs))
+		copy(exprRefs, currentNode.Refs)
+	}
+
+	// Build test list: start with current, apply removals, then additions
+	type testEntry struct{ Name, Source string }
+	tests := make([]testEntry, 0, len(currentNode.Tests))
+	for _, t := range currentNode.Tests {
+		tests = append(tests, testEntry{t.Name, t.Source})
+	}
+
+	// Remove tests
+	for _, removeName := range removeTests {
+		found := false
+		for i, t := range tests {
+			if t.Name == removeName {
+				tests = append(tests[:i], tests[i+1:]...)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, false, fmt.Errorf("refine %s: test %q not found", name, removeName)
+		}
+	}
+
+	// Check for duplicate names before adding
+	for _, ti := range addTests {
+		for _, t := range tests {
+			if t.Name == ti.Name {
+				return nil, false, fmt.Errorf("refine %s: test %q already exists", name, ti.Name)
+			}
+		}
+		tests = append(tests, testEntry{ti.Name, ti.Expr})
+	}
+
+	// Create new node
+	newNodeID := g.makeNodeID(name, g.activeLib)
+	newNode := &GraphNode{
+		ID:     newNodeID,
+		Expr:   exprResolved,
+		Refs:   exprRefs,
+		Source: exprSource,
+	}
+
+	// Temporarily set node in graph for test self-reference
+	g.nodes[newNode.ID] = newNode
+	oldNodeID := g.symbols[name]
+	g.symbols[name] = newNode.ID
+
+	// Resolve and evaluate all tests (gate)
+	var resolvedTests []GraphNodeTest
+	var gateErr error
+
+	for _, t := range tests {
+		parsedTest, parseErr := Parse(t.Source)
+		if parseErr != nil {
+			gateErr = fmt.Errorf("refine %s: parse test %q: %w", name, t.Name, parseErr)
+			break
+		}
+		resolvedTest, rErr := g.resolveTestAST(parsedTest, name, nil)
+		if rErr != nil {
+			gateErr = fmt.Errorf("refine %s: resolve test %q: %w", name, t.Name, rErr)
+			break
+		}
+		resolvedTests = append(resolvedTests, GraphNodeTest{
+			Name:   t.Name,
+			Source: t.Source,
+			Expr:   resolvedTest,
+		})
+	}
+
+	// Evaluate tests
+	if gateErr == nil && len(resolvedTests) > 0 {
+		for _, t := range resolvedTests {
+			savedFuel := g.eval.Fuel
+			savedFuelSet := g.eval.FuelSet
+			g.eval.Fuel = 100000
+			g.eval.FuelSet = true
+			result, evalErr := g.eval.Eval(t.Expr)
+			g.eval.Fuel = savedFuel
+			g.eval.FuelSet = savedFuelSet
+
+			if evalErr != nil {
+				gateErr = fmt.Errorf("refine %s: test %q failed: %w", name, t.Name, evalErr)
+				break
+			}
+			if !result.Truthy() {
+				gateErr = fmt.Errorf("refine %s: test %q returned falsy: %s", name, t.Name, result.String())
+				break
+			}
+		}
+	}
+
+	if gateErr != nil {
+		// Rollback: restore old symbol, remove orphan node
+		delete(g.nodes, newNode.ID)
+		g.symbols[name] = oldNodeID
+		return nil, false, gateErr
+	}
+
+	// Commit
+	newNode.Tests = resolvedTests
+	if len(newNode.Tests) > 0 {
+		g.symbolStatus[name] = StatusGreen
+	} else {
+		g.symbolStatus[name] = StatusUntested
+	}
+
+	// Write to log (define + test entries)
+	if err := g.appendLog(fmt.Sprintf("(define %s %s)", name, exprSource)); err != nil {
+		return nil, false, fmt.Errorf("refine %s: write log: %w", name, err)
+	}
+	for _, test := range newNode.Tests {
+		if err := g.appendLog(formatTestEntry(name, test)); err != nil {
+			return nil, false, fmt.Errorf("refine %s: write test log: %w", name, err)
+		}
+	}
+
+	// Propagation: suppressed when both expr and tests change simultaneously
+	propagate := !(exprChanged && testsChanged)
+
+	return newNode, propagate, nil
 }
 
 func (g *Graph) Delete(name string) error {
@@ -204,6 +511,7 @@ func (g *Graph) Delete(name string) error {
 
 	delete(g.symbols, name)
 	delete(g.symbolOwner, name)
+	delete(g.symbolStatus, name)
 
 	if err := g.appendLog(fmt.Sprintf("(delete %s)", name)); err != nil {
 		return fmt.Errorf("write log: %w", err)
@@ -247,6 +555,36 @@ func (g *Graph) List() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// GetSymbolStatus returns the contract status of a symbol.
+func (g *Graph) GetSymbolStatus(name string) (SymbolStatus, bool) {
+	status, ok := g.symbolStatus[name]
+	return status, ok
+}
+
+// RedSymbols returns names of all symbols with status Red.
+func (g *Graph) RedSymbols() []string {
+	var result []string
+	for name, status := range g.symbolStatus {
+		if status == StatusRed {
+			result = append(result, name)
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
+// GreenSymbols returns names of all symbols with status Green.
+func (g *Graph) GreenSymbols() []string {
+	var result []string
+	for name, status := range g.symbolStatus {
+		if status == StatusGreen {
+			result = append(result, name)
+		}
+	}
+	sort.Strings(result)
+	return result
 }
 
 func (g *Graph) Close() error {
@@ -483,6 +821,228 @@ func (g *Graph) resolveAST(node *Node, refs *[]Ref, boundNames map[string]bool) 
 	}
 }
 
+// --- Restricted test resolution ---
+
+// resolveTestAST resolves a test expression with restricted scope:
+// only builtins, base library symbols, and the symbol under test are allowed.
+// boundNames works the same as in resolveAST (for let/fn/form params).
+func (g *Graph) resolveTestAST(node *Node, selfName string, boundNames map[string]bool) (*Node, error) {
+	switch node.Kind {
+	case NodeSymbol:
+		if boundNames[node.Str] {
+			return node, nil
+		}
+		if strings.HasPrefix(node.Str, "node:") {
+			return &Node{Kind: NodeRef, Str: node.Str, Ref: node.Str}, nil
+		}
+		// Allow the symbol under test
+		if node.Str == selfName {
+			if nodeID, ok := g.symbols[node.Str]; ok {
+				return &Node{Kind: NodeRef, Str: node.Str, Ref: nodeID}, nil
+			}
+			return nil, fmt.Errorf("unresolved symbol: %s", node.Str)
+		}
+		// Allow builtins
+		if g.eval.Builtins != nil {
+			if _, ok := g.eval.Builtins[node.Str]; ok {
+				return &Node{Kind: NodeBuiltin, Str: node.Str}, nil
+			}
+		}
+		// Allow base library symbols
+		if owner, exists := g.symbolOwner[node.Str]; exists && owner == "base" {
+			if nodeID, ok := g.symbols[node.Str]; ok {
+				return &Node{Kind: NodeRef, Str: node.Str, Ref: nodeID}, nil
+			}
+		}
+		return nil, fmt.Errorf("test expressions can only reference builtins, base library, and the symbol under test; got: %s", node.Str)
+
+	case NodeList:
+		if len(node.Children) == 0 {
+			return node, nil
+		}
+
+		head := node.Children[0]
+		newChildren := make([]*Node, len(node.Children))
+
+		if head.Kind == NodeSymbol {
+			switch head.Str {
+			case "fn", "form":
+				newChildren[0] = head
+				if len(node.Children) >= 2 {
+					newChildren[1] = node.Children[1]
+				}
+				if len(node.Children) >= 3 {
+					innerBound := copyBoundNames(boundNames)
+					if len(node.Children) >= 2 && node.Children[1].Kind == NodeList {
+						for _, p := range node.Children[1].Children {
+							if p.Kind == NodeSymbol && p.Str != "&" {
+								innerBound[p.Str] = true
+							}
+						}
+					}
+					resolved, err := g.resolveTestAST(node.Children[2], selfName, innerBound)
+					if err != nil {
+						return nil, err
+					}
+					newChildren[2] = resolved
+				}
+				for i := 3; i < len(node.Children); i++ {
+					newChildren[i] = node.Children[i]
+				}
+				return &Node{Kind: NodeList, Children: newChildren}, nil
+
+			case "let":
+				newChildren[0] = head
+				innerBound := copyBoundNames(boundNames)
+				if len(node.Children) >= 2 {
+					bindingsNode := node.Children[1]
+					if bindingsNode.Kind == NodeList {
+						newBindings := make([]*Node, len(bindingsNode.Children))
+						isFlat := len(bindingsNode.Children) == 0 ||
+							bindingsNode.Children[0].Kind != NodeList
+						if isFlat {
+							for i := 0; i < len(bindingsNode.Children); i += 2 {
+								nameNode := bindingsNode.Children[i]
+								newBindings[i] = nameNode
+								if i+1 < len(bindingsNode.Children) {
+									resolved, err := g.resolveTestAST(bindingsNode.Children[i+1], selfName, innerBound)
+									if err != nil {
+										return nil, err
+									}
+									newBindings[i+1] = resolved
+								}
+								if nameNode.Kind == NodeSymbol {
+									innerBound[nameNode.Str] = true
+								}
+							}
+						} else {
+							for i, pair := range bindingsNode.Children {
+								if pair.Kind == NodeList && len(pair.Children) == 2 {
+									resolved, err := g.resolveTestAST(pair.Children[1], selfName, innerBound)
+									if err != nil {
+										return nil, err
+									}
+									newBindings[i] = &Node{
+										Kind: NodeList,
+										Children: []*Node{
+											pair.Children[0],
+											resolved,
+										},
+									}
+									if pair.Children[0].Kind == NodeSymbol {
+										innerBound[pair.Children[0].Str] = true
+									}
+								} else {
+									newBindings[i] = pair
+								}
+							}
+						}
+						newChildren[1] = &Node{Kind: NodeList, Children: newBindings}
+					} else {
+						newChildren[1] = bindingsNode
+					}
+				}
+				if len(node.Children) >= 3 {
+					resolved, err := g.resolveTestAST(node.Children[2], selfName, innerBound)
+					if err != nil {
+						return nil, err
+					}
+					newChildren[2] = resolved
+				}
+				for i := 3; i < len(node.Children); i++ {
+					newChildren[i] = node.Children[i]
+				}
+				return &Node{Kind: NodeList, Children: newChildren}, nil
+
+			case "quote":
+				return node, nil
+
+			case "loop":
+				newChildren[0] = head
+				innerBound := copyBoundNames(boundNames)
+				if len(node.Children) >= 2 {
+					bindingsNode := node.Children[1]
+					if bindingsNode.Kind == NodeList {
+						newBindings := make([]*Node, len(bindingsNode.Children))
+						for i, pair := range bindingsNode.Children {
+							if pair.Kind == NodeList && len(pair.Children) == 2 {
+								resolved, err := g.resolveTestAST(pair.Children[1], selfName, innerBound)
+								if err != nil {
+									return nil, err
+								}
+								newBindings[i] = &Node{
+									Kind: NodeList,
+									Children: []*Node{
+										pair.Children[0],
+										resolved,
+									},
+								}
+								if pair.Children[0].Kind == NodeSymbol {
+									innerBound[pair.Children[0].Str] = true
+								}
+							} else {
+								newBindings[i] = pair
+							}
+						}
+						newChildren[1] = &Node{Kind: NodeList, Children: newBindings}
+					} else {
+						newChildren[1] = bindingsNode
+					}
+				}
+				if len(node.Children) >= 3 {
+					resolved, err := g.resolveTestAST(node.Children[2], selfName, innerBound)
+					if err != nil {
+						return nil, err
+					}
+					newChildren[2] = resolved
+				}
+				for i := 3; i < len(node.Children); i++ {
+					newChildren[i] = node.Children[i]
+				}
+				return &Node{Kind: NodeList, Children: newChildren}, nil
+			}
+
+			if coreFormKeywords[head.Str] {
+				newChildren[0] = head
+				for i := 1; i < len(node.Children); i++ {
+					resolved, err := g.resolveTestAST(node.Children[i], selfName, boundNames)
+					if err != nil {
+						return nil, err
+					}
+					newChildren[i] = resolved
+				}
+				return &Node{Kind: NodeList, Children: newChildren}, nil
+			}
+
+			if g.eval.Builtins != nil {
+				if _, ok := g.eval.Builtins[head.Str]; ok {
+					newChildren[0] = &Node{Kind: NodeBuiltin, Str: head.Str}
+					for i := 1; i < len(node.Children); i++ {
+						resolved, err := g.resolveTestAST(node.Children[i], selfName, boundNames)
+						if err != nil {
+							return nil, err
+						}
+						newChildren[i] = resolved
+					}
+					return &Node{Kind: NodeList, Children: newChildren}, nil
+				}
+			}
+		}
+
+		for i, child := range node.Children {
+			resolved, err := g.resolveTestAST(child, selfName, boundNames)
+			if err != nil {
+				return nil, err
+			}
+			newChildren[i] = resolved
+		}
+		return &Node{Kind: NodeList, Children: newChildren}, nil
+
+	default:
+		return node, nil
+	}
+}
+
 // --- Graph builtins ---
 
 func (g *Graph) graphBuiltins() map[string]Builtin {
@@ -598,7 +1158,9 @@ func (g *Graph) builtinFollow(args []Value) (Value, error) {
 // --- Refresh ---
 
 type RefreshResult struct {
-	Refreshed []string
+	Refreshed []string // symbols successfully auto-refreshed (Green)
+	Red       []string // symbols whose tests failed during cascade
+	Stale     []string // symbols with no contract, skipped
 }
 
 func (g *Graph) RefreshAll(targets []string, dry bool) (*RefreshResult, error) {
@@ -620,20 +1182,27 @@ func (g *Graph) RefreshAll(targets []string, dry bool) (*RefreshResult, error) {
 		}
 	}
 
-	// BFS: find all symbols to refresh.
+	if dry {
+		return g.refreshAllDry(targetSymbols, targetNodeIDs)
+	}
+	return g.refreshAllLive(targetSymbols, targetNodeIDs)
+}
+
+// refreshAllDry reports all reachable dependents without modifying state.
+func (g *Graph) refreshAllDry(targetSymbols, targetNodeIDs map[string]bool) (*RefreshResult, error) {
 	var refreshOrder []string
-	refreshed := make(map[string]bool)
+	visited := make(map[string]bool)
 
 	// Find initial dependents.
 	for name, symNodeID := range g.symbols {
 		if targetSymbols[name] {
-			continue // skip targets themselves
+			continue
 		}
 		node := g.nodes[symNodeID]
 		for _, ref := range node.Refs {
 			if targetSymbols[ref.Symbol] || targetNodeIDs[ref.NodeID] {
-				if !refreshed[name] {
-					refreshed[name] = true
+				if !visited[name] {
+					visited[name] = true
 					refreshOrder = append(refreshOrder, name)
 				}
 				break
@@ -645,13 +1214,13 @@ func (g *Graph) RefreshAll(targets []string, dry bool) (*RefreshResult, error) {
 	for i := 0; i < len(refreshOrder); i++ {
 		current := refreshOrder[i]
 		for name, symNodeID := range g.symbols {
-			if refreshed[name] || targetSymbols[name] {
+			if visited[name] || targetSymbols[name] {
 				continue
 			}
 			node := g.nodes[symNodeID]
 			for _, ref := range node.Refs {
 				if ref.Symbol == current {
-					refreshed[name] = true
+					visited[name] = true
 					refreshOrder = append(refreshOrder, name)
 					break
 				}
@@ -659,32 +1228,65 @@ func (g *Graph) RefreshAll(targets []string, dry bool) (*RefreshResult, error) {
 		}
 	}
 
-	// Sort for deterministic output.
 	sort.Strings(refreshOrder)
+	return &RefreshResult{Refreshed: refreshOrder}, nil
+}
 
-	if dry {
-		return &RefreshResult{Refreshed: refreshOrder}, nil
+// refreshAllLive performs BFS with circuit breaker:
+// - Symbols with tests: re-resolve, run tests. Pass → Green + continue. Fail → Red + stop.
+// - Symbols without tests: stale + stop (no auto-refresh without contract).
+func (g *Graph) refreshAllLive(targetSymbols, targetNodeIDs map[string]bool) (*RefreshResult, error) {
+	var refreshed, redSymbols, staleSymbols []string
+	visited := make(map[string]bool)
+
+	// Find initial dependents.
+	var queue []string
+	for name, symNodeID := range g.symbols {
+		if targetSymbols[name] {
+			continue
+		}
+		node := g.nodes[symNodeID]
+		for _, ref := range node.Refs {
+			if targetSymbols[ref.Symbol] || targetNodeIDs[ref.NodeID] {
+				if !visited[name] {
+					visited[name] = true
+					queue = append(queue, name)
+				}
+				break
+			}
+		}
 	}
 
-	// Re-parse and re-resolve each dependent, logging to owning file.
-	for _, name := range refreshOrder {
+	// Sort initial queue for deterministic processing.
+	sort.Strings(queue)
+
+	// Process queue: BFS with circuit breaker.
+	for i := 0; i < len(queue); i++ {
+		name := queue[i]
 		currentNodeID := g.symbols[name]
 		node := g.nodes[currentNodeID]
 
+		// No contract → stale, stop this branch.
+		if len(node.Tests) == 0 {
+			staleSymbols = append(staleSymbols, name)
+			// Don't add dependents — circuit breaker.
+			continue
+		}
+
+		// Re-parse and re-resolve expression.
 		parsed, err := Parse(node.Source)
 		if err != nil {
 			return nil, fmt.Errorf("refresh-all: re-parse %s: %w", name, err)
 		}
-
 		var refs []Ref
 		resolved, resolveErr := g.resolveAST(parsed, &refs, nil)
 		if resolveErr != nil {
 			return nil, fmt.Errorf("refresh-all: resolve %s: %w", name, resolveErr)
 		}
 
+		// Create new node (temporary for test evaluation).
 		owner := g.symbolOwner[name]
 		newNodeID := g.makeNodeID(name, owner)
-
 		newNode := &GraphNode{
 			ID:     newNodeID,
 			Expr:   resolved,
@@ -692,15 +1294,99 @@ func (g *Graph) RefreshAll(targets []string, dry bool) (*RefreshResult, error) {
 			Source: node.Source,
 		}
 		g.nodes[newNodeID] = newNode
+		oldNodeID := g.symbols[name]
 		g.symbols[name] = newNodeID
 
-		// Log to the owning file
-		if err := g.appendLogToOwner(name, fmt.Sprintf("(define %s %s)", name, node.Source)); err != nil {
+		// Re-resolve tests with restricted scope.
+		var newTests []GraphNodeTest
+		var gateErr error
+		for _, test := range node.Tests {
+			parsedTest, parseErr := Parse(test.Source)
+			if parseErr != nil {
+				gateErr = fmt.Errorf("refresh-all: re-parse test %s/%s: %w", name, test.Name, parseErr)
+				break
+			}
+			resolvedTest, rErr := g.resolveTestAST(parsedTest, name, nil)
+			if rErr != nil {
+				gateErr = fmt.Errorf("refresh-all: resolve test %s/%s: %w", name, test.Name, rErr)
+				break
+			}
+			newTests = append(newTests, GraphNodeTest{
+				Name:   test.Name,
+				Source: test.Source,
+				Expr:   resolvedTest,
+			})
+		}
+
+		// Evaluate tests.
+		if gateErr == nil {
+			for _, t := range newTests {
+				savedFuel := g.eval.Fuel
+				savedFuelSet := g.eval.FuelSet
+				g.eval.Fuel = 100000
+				g.eval.FuelSet = true
+				result, evalErr := g.eval.Eval(t.Expr)
+				g.eval.Fuel = savedFuel
+				g.eval.FuelSet = savedFuelSet
+
+				if evalErr != nil {
+					gateErr = evalErr
+					break
+				}
+				if !result.Truthy() {
+					gateErr = fmt.Errorf("test %q returned falsy", t.Name)
+					break
+				}
+			}
+		}
+
+		if gateErr != nil {
+			// Tests failed → Red: rollback, keep old node, stop this branch.
+			delete(g.nodes, newNodeID)
+			g.symbols[name] = oldNodeID
+			g.symbolStatus[name] = StatusRed
+			redSymbols = append(redSymbols, name)
+			// Don't add dependents — circuit breaker.
+			continue
+		}
+
+		// Tests passed → Green: commit new node.
+		newNode.Tests = newTests
+		g.symbolStatus[name] = StatusGreen
+		refreshed = append(refreshed, name)
+
+		// Log to the owning file.
+		logWriter := func(entry string) error {
+			return g.appendLogToOwner(name, entry)
+		}
+		if err := g.writeNodeToLog(name, newNode, logWriter); err != nil {
 			return nil, fmt.Errorf("refresh-all: log %s: %w", name, err)
 		}
+
+		// Add dependents to queue (continue cascade).
+		var newDeps []string
+		for depName, symNodeID := range g.symbols {
+			if visited[depName] || targetSymbols[depName] {
+				continue
+			}
+			depNode := g.nodes[symNodeID]
+			for _, ref := range depNode.Refs {
+				if ref.Symbol == name {
+					visited[depName] = true
+					newDeps = append(newDeps, depName)
+					break
+				}
+			}
+		}
+		sort.Strings(newDeps)
+		queue = append(queue, newDeps...)
 	}
 
-	return &RefreshResult{Refreshed: refreshOrder}, nil
+	sort.Strings(refreshed)
+	sort.Strings(redSymbols)
+	sort.Strings(staleSymbols)
+
+	return &RefreshResult{Refreshed: refreshed, Red: redSymbols, Stale: staleSymbols}, nil
 }
 
 // appendLogToOwner writes an entry to the log file that owns the given symbol.
@@ -856,6 +1542,51 @@ func (g *Graph) replayEntryForLib(entry, libName string) error {
 		}
 		delete(g.symbols, nameNode.Str)
 		delete(g.symbolOwner, nameNode.Str)
+		return nil
+
+	case "test":
+		// (test symbol-name "label" test-expr)
+		if len(node.Children) < 4 {
+			return fmt.Errorf("test requires name, label, and expression: %s", entry)
+		}
+		nameNode := node.Children[1]
+		if nameNode.Kind != NodeSymbol {
+			return fmt.Errorf("test symbol name must be symbol: %s", entry)
+		}
+		name := nameNode.Str
+		labelNode := node.Children[2]
+		if labelNode.Kind != NodeString {
+			return fmt.Errorf("test label must be string: %s", entry)
+		}
+		label := labelNode.Str
+
+		testSource := extractTestExpr(entry)
+		if testSource == "" {
+			return fmt.Errorf("cannot extract test expression: %s", entry)
+		}
+
+		parsedTest, parseErr := Parse(testSource)
+		if parseErr != nil {
+			return fmt.Errorf("parsing test expression: %w", parseErr)
+		}
+
+		// Resolve test with restricted scope (builtins + base + self)
+		resolvedTest, resolveErr := g.resolveTestAST(parsedTest, name, nil)
+		if resolveErr != nil {
+			return fmt.Errorf("test %s/%s: %w", name, label, resolveErr)
+		}
+
+		// Attach test to the current node for this symbol
+		nodeID, ok := g.symbols[name]
+		if !ok {
+			return fmt.Errorf("test: symbol %s not defined", name)
+		}
+		gn := g.nodes[nodeID]
+		gn.Tests = append(gn.Tests, GraphNodeTest{
+			Name:   label,
+			Source: testSource,
+			Expr:   resolvedTest,
+		})
 		return nil
 
 	default:
@@ -1042,6 +1773,9 @@ func (g *Graph) LibraryCompact(name string) error {
 		}
 		node := g.nodes[nodeID]
 		fmt.Fprintf(&sb, "(define %s %s)\n\n", symName, node.Source)
+		for _, test := range node.Tests {
+			fmt.Fprintf(&sb, "%s\n\n", formatTestEntry(symName, test))
+		}
 	}
 
 	return os.WriteFile(path, []byte(sb.String()), 0644)
@@ -1077,8 +1811,10 @@ func (g *Graph) Promote(name, targetLib string) (*GraphNode, error) {
 		return nil, fmt.Errorf("promote: target library %q not found", targetLib)
 	}
 
-	// Get source from current node
-	source := g.nodes[nodeID].Source
+	// Get source and tests from current node
+	oldNode := g.nodes[nodeID]
+	source := oldNode.Source
+	oldTests := oldNode.Tests
 
 	// Remove session ownership so Define won't reject it
 	delete(g.symbolOwner, name)
@@ -1094,6 +1830,35 @@ func (g *Graph) Promote(name, targetLib string) (*GraphNode, error) {
 		g.LibraryClose()
 		return nil, fmt.Errorf("promote: %w", err)
 	}
+
+	// Carry forward tests from old node and write test entries to library log
+	if len(oldTests) > 0 {
+		// Re-resolve tests in the new library context
+		var newTests []GraphNodeTest
+		for _, test := range oldTests {
+			parsedTest, parseErr := Parse(test.Source)
+			if parseErr != nil {
+				g.LibraryClose()
+				return nil, fmt.Errorf("promote: re-parse test %s/%s: %w", name, test.Name, parseErr)
+			}
+			resolvedTest, resolveErr := g.resolveTestAST(parsedTest, name, nil)
+			if resolveErr != nil {
+				g.LibraryClose()
+				return nil, fmt.Errorf("promote: resolve test %s/%s: %w", name, test.Name, resolveErr)
+			}
+			newTests = append(newTests, GraphNodeTest{
+				Name:   test.Name,
+				Source: test.Source,
+				Expr:   resolvedTest,
+			})
+			if err := g.appendLog(formatTestEntry(name, test)); err != nil {
+				g.LibraryClose()
+				return nil, fmt.Errorf("promote: log test %s/%s: %w", name, test.Name, err)
+			}
+		}
+		node.Tests = newTests
+	}
+
 	if err := g.LibraryClose(); err != nil {
 		return nil, fmt.Errorf("promote: %w", err)
 	}
@@ -1155,6 +1920,9 @@ func (g *Graph) compactSession() error {
 		}
 		gn := g.nodes[nid]
 		fmt.Fprintf(&sb, "(define %s %s)\n\n", symName, gn.Source)
+		for _, test := range gn.Tests {
+			fmt.Fprintf(&sb, "%s\n\n", formatTestEntry(symName, test))
+		}
 	}
 
 	if err := os.WriteFile(path, []byte(sb.String()), 0644); err != nil {
@@ -1208,6 +1976,7 @@ func (g *Graph) Clear() error {
 	g.symbols = make(map[string]string)
 	g.nameCounters = make(map[string]int)
 	g.symbolOwner = make(map[string]string)
+	g.symbolStatus = make(map[string]SymbolStatus)
 	g.activeLib = ""
 
 	// Reload libraries
@@ -1229,6 +1998,19 @@ func (g *Graph) Clear() error {
 func (g *Graph) appendLog(entry string) error {
 	_, err := fmt.Fprintf(g.logFile, "%s\n\n", entry)
 	return err
+}
+
+// writeNodeToLog writes a define entry and any test entries for a node.
+func (g *Graph) writeNodeToLog(name string, node *GraphNode, writer func(string) error) error {
+	if err := writer(fmt.Sprintf("(define %s %s)", name, node.Source)); err != nil {
+		return err
+	}
+	for _, test := range node.Tests {
+		if err := writer(formatTestEntry(name, test)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func extractDefineExpr(entry string) string {
@@ -1253,6 +2035,55 @@ func extractDefineExpr(entry string) string {
 	}
 	inner = strings.TrimSpace(inner[i:])
 	return inner
+}
+
+// extractTestExpr extracts the test expression from a (test name "label" expr) entry.
+func extractTestExpr(entry string) string {
+	s := strings.TrimSpace(entry)
+	if !strings.HasPrefix(s, "(") || !strings.HasSuffix(s, ")") {
+		return ""
+	}
+	inner := s[1 : len(s)-1]
+	inner = strings.TrimSpace(inner)
+
+	// Skip "test"
+	if !strings.HasPrefix(inner, "test") {
+		return ""
+	}
+	inner = strings.TrimSpace(inner[4:])
+
+	// Skip symbol name
+	i := 0
+	for i < len(inner) && inner[i] != ' ' && inner[i] != '\t' && inner[i] != '\n' {
+		i++
+	}
+	inner = strings.TrimSpace(inner[i:])
+
+	// Skip the string label — find opening quote, scan to closing quote
+	if len(inner) == 0 || inner[0] != '"' {
+		return ""
+	}
+	i = 1
+	for i < len(inner) {
+		if inner[i] == '\\' {
+			i += 2
+			continue
+		}
+		if inner[i] == '"' {
+			break
+		}
+		i++
+	}
+	if i >= len(inner) {
+		return ""
+	}
+	inner = strings.TrimSpace(inner[i+1:])
+	return inner
+}
+
+// formatTestEntry formats a test log entry.
+func formatTestEntry(symbolName string, test GraphNodeTest) string {
+	return fmt.Sprintf("(test %s %q %s)", symbolName, test.Name, test.Source)
 }
 
 func splitLogEntries(data string) []string {

@@ -460,9 +460,13 @@ func TestRefreshAllDry(t *testing.T) {
 }
 
 func TestRefreshAll(t *testing.T) {
-	g := testGraph(t)
-	g.Define("a", "10")
-	g.Define("b", "a")
+	g := testGraphWithBase(t)
+	g.DefineWithTests("a", "10", []TestInput{
+		{Name: "is positive", Expr: "(gt a 0)"},
+	})
+	g.DefineWithTests("b", "a", []TestInput{
+		{Name: "is positive", Expr: "(gt b 0)"},
+	})
 
 	// b evaluates to 10 via node:a-1
 	val, err := g.Eval("b")
@@ -480,7 +484,7 @@ func TestRefreshAll(t *testing.T) {
 		t.Fatalf("expected stale 10, got %s", val.String())
 	}
 
-	// Refresh
+	// Refresh — b has contract, should auto-refresh
 	result, err := g.RefreshAll([]string{"a"}, false)
 	if err != nil {
 		t.Fatal(err)
@@ -500,10 +504,16 @@ func TestRefreshAll(t *testing.T) {
 }
 
 func TestRefreshAllCascade(t *testing.T) {
-	g := testGraph(t)
-	g.Define("a", "1")
-	g.Define("b", "(add a 10)")
-	g.Define("c", "(add b 100)")
+	g := testGraphWithBase(t)
+	g.DefineWithTests("a", "1", []TestInput{
+		{Name: "is positive", Expr: "(gt a 0)"},
+	})
+	g.DefineWithTests("b", "(add a 10)", []TestInput{
+		{Name: "is positive", Expr: "(gt b 0)"},
+	})
+	g.DefineWithTests("c", "(add b 100)", []TestInput{
+		{Name: "is positive", Expr: "(gt c 0)"},
+	})
 
 	g.Define("a", "2")
 
@@ -527,13 +537,21 @@ func TestRefreshAllCascade(t *testing.T) {
 
 func TestRefreshAllLogReplay(t *testing.T) {
 	dir := t.TempDir()
+	baseContent := `(define inc (fn (x) (add x 1)))
+`
+	os.WriteFile(filepath.Join(dir, "base.logos"), []byte(baseContent), 0644)
+	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\n"), 0644)
 
 	g1, err := NewGraph(dir, DataBuiltins())
 	if err != nil {
 		t.Fatal(err)
 	}
-	g1.Define("a", "10")
-	g1.Define("b", "a")
+	g1.DefineWithTests("a", "10", []TestInput{
+		{Name: "is positive", Expr: "(gt a 0)"},
+	})
+	g1.DefineWithTests("b", "a", []TestInput{
+		{Name: "is positive", Expr: "(gt b 0)"},
+	})
 	g1.Define("a", "20")
 	g1.RefreshAll([]string{"a"}, false)
 	g1.Close()
@@ -1035,8 +1053,14 @@ func TestLibraryDeleteGuardRail(t *testing.T) {
 
 func TestLibraryRefreshAllCrossLibrary(t *testing.T) {
 	dir := t.TempDir()
-	// Library defines 'a'
-	os.WriteFile(filepath.Join(dir, "base.logos"), []byte("(define a 10)\n\n"), 0644)
+	// Library defines 'a' and base functions
+	libContent := `(define inc (fn (x) (add x 1)))
+
+(define a 10)
+
+(test a "is positive" (gt a 0))
+`
+	os.WriteFile(filepath.Join(dir, "base.logos"), []byte(libContent), 0644)
 	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\n"), 0644)
 
 	g, err := NewGraph(dir, DataBuiltins())
@@ -1045,8 +1069,10 @@ func TestLibraryRefreshAllCrossLibrary(t *testing.T) {
 	}
 	defer g.Close()
 
-	// Session defines 'b' referencing 'a'
-	g.Define("b", "a")
+	// Session defines 'b' referencing 'a', with a contract
+	g.DefineWithTests("b", "a", []TestInput{
+		{Name: "is positive", Expr: "(gt b 0)"},
+	})
 
 	val, _ := g.Eval("b")
 	if !ValuesEqual(val, IntVal(10)) {
@@ -1064,7 +1090,7 @@ func TestLibraryRefreshAllCrossLibrary(t *testing.T) {
 		t.Fatalf("expected stale 10, got %s", val.String())
 	}
 
-	// Refresh — b is session, a is base library
+	// Refresh — b has contract, should auto-refresh
 	result, err := g.RefreshAll([]string{"a"}, false)
 	if err != nil {
 		t.Fatal(err)
@@ -1580,5 +1606,953 @@ func TestDefineRejectsAllBuiltinNames(t *testing.T) {
 		if err == nil {
 			t.Fatalf("expected error defining builtin %q", name)
 		}
+	}
+}
+
+// --- Symbol Contracts: Phase 1 tests ---
+
+func TestExtractTestExpr(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{`(test foo "adds one" (eq (foo 1) 2))`, `(eq (foo 1) 2)`},
+		{`(test my-fn "basic" true)`, `true`},
+		{`(test x "escaped \"quote\"" (eq x 1))`, `(eq x 1)`},
+	}
+	for _, tc := range tests {
+		got := extractTestExpr(tc.input)
+		if got != tc.expected {
+			t.Errorf("extractTestExpr(%q) = %q, want %q", tc.input, got, tc.expected)
+		}
+	}
+}
+
+func TestFormatTestEntry(t *testing.T) {
+	test := GraphNodeTest{Name: "adds one", Source: "(eq (inc 5) 6)"}
+	got := formatTestEntry("inc", test)
+	expected := `(test inc "adds one" (eq (inc 5) 6))`
+	if got != expected {
+		t.Errorf("formatTestEntry = %q, want %q", got, expected)
+	}
+}
+
+func TestReplayTestEntries(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write a base library with inc
+	baseContent := `(define inc (fn (x) (add x 1)))
+`
+	os.WriteFile(filepath.Join(dir, "base.logos"), []byte(baseContent), 0644)
+	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\n"), 0644)
+
+	// Write a session log with a define + test entry
+	sessionContent := `(define double (fn (x) (mul x 2)))
+
+(test double "doubles" (eq (double 3) 6))
+
+`
+	os.WriteFile(filepath.Join(dir, "log.logos"), []byte(sessionContent), 0644)
+
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	// Check that the node has the test attached
+	nodeID := g.symbols["double"]
+	node := g.nodes[nodeID]
+	if len(node.Tests) != 1 {
+		t.Fatalf("expected 1 test, got %d", len(node.Tests))
+	}
+	if node.Tests[0].Name != "doubles" {
+		t.Errorf("test name = %q, want %q", node.Tests[0].Name, "doubles")
+	}
+	if node.Tests[0].Source != "(eq (double 3) 6)" {
+		t.Errorf("test source = %q, want %q", node.Tests[0].Source, "(eq (double 3) 6)")
+	}
+}
+
+func TestResolveTestASTRestrictsScope(t *testing.T) {
+	g := testGraphWithLibrary(t)
+
+	// Define a non-base symbol
+	g.Define("my-fn", "(fn (x) (add x 1))")
+
+	// Test referencing builtins should work
+	parsed, _ := Parse("(eq 1 1)")
+	_, err := g.resolveTestAST(parsed, "my-fn", nil)
+	if err != nil {
+		t.Errorf("expected builtins to be allowed in test, got: %v", err)
+	}
+
+	// Test referencing base library should work
+	parsed, _ = Parse("(empty? (list))")
+	_, err = g.resolveTestAST(parsed, "my-fn", nil)
+	if err != nil {
+		t.Errorf("expected base library to be allowed in test, got: %v", err)
+	}
+
+	// Test referencing self should work
+	parsed, _ = Parse("(eq (my-fn 1) 2)")
+	_, err = g.resolveTestAST(parsed, "my-fn", nil)
+	if err != nil {
+		t.Errorf("expected self-reference to be allowed in test, got: %v", err)
+	}
+
+	// Define another non-base symbol
+	g.Define("other-fn", "(fn (x) (sub x 1))")
+
+	// Test referencing non-base, non-self should fail
+	parsed, _ = Parse("(eq (other-fn 1) 0)")
+	_, err = g.resolveTestAST(parsed, "my-fn", nil)
+	if err == nil {
+		t.Error("expected error referencing non-base symbol in test")
+	}
+	if err != nil && !strings.Contains(err.Error(), "test expressions can only reference") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestCompactPreservesTests(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a library with a symbol + test
+	baseContent := `(define inc (fn (x) (add x 1)))
+`
+	libContent := `(define double (fn (x) (mul x 2)))
+
+(test double "doubles" (eq (double 3) 6))
+
+`
+	os.WriteFile(filepath.Join(dir, "base.logos"), []byte(baseContent), 0644)
+	os.WriteFile(filepath.Join(dir, "mylib.logos"), []byte(libContent), 0644)
+	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\nmylib\n"), 0644)
+
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	// Verify test was loaded
+	nodeID := g.symbols["double"]
+	node := g.nodes[nodeID]
+	if len(node.Tests) != 1 {
+		t.Fatalf("expected 1 test before compact, got %d", len(node.Tests))
+	}
+
+	// Compact the library
+	if err := g.LibraryCompact("mylib"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read the compacted file and verify test entry is present
+	data, _ := os.ReadFile(filepath.Join(dir, "mylib.logos"))
+	content := string(data)
+	if !strings.Contains(content, `(test double "doubles"`) {
+		t.Errorf("compacted file missing test entry:\n%s", content)
+	}
+
+	// Reload and verify tests survive
+	g.Close()
+	g2, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g2.Close()
+
+	nodeID2 := g2.symbols["double"]
+	node2 := g2.nodes[nodeID2]
+	if len(node2.Tests) != 1 {
+		t.Fatalf("expected 1 test after compact+reload, got %d", len(node2.Tests))
+	}
+}
+
+func TestDefineWithTestsPassingGate(t *testing.T) {
+	g := testGraphWithLibrary(t)
+
+	tests := []TestInput{
+		{Name: "adds one", Expr: "(eq (inc 5) 6)"},
+	}
+	node, err := g.DefineWithTests("inc", "(fn (x) (add x 1))", tests)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(node.Tests) != 1 {
+		t.Fatalf("expected 1 test, got %d", len(node.Tests))
+	}
+	if node.Tests[0].Name != "adds one" {
+		t.Errorf("test name = %q", node.Tests[0].Name)
+	}
+}
+
+func TestDefineWithTestsFailingGate(t *testing.T) {
+	g := testGraphWithLibrary(t)
+
+	tests := []TestInput{
+		{Name: "wrong", Expr: "(eq 1 2)"},
+	}
+	_, err := g.DefineWithTests("foo", "42", tests)
+	if err == nil {
+		t.Fatal("expected error from failing test gate")
+	}
+	if !strings.Contains(err.Error(), "test \"wrong\" returned falsy") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Symbol should NOT exist (rolled back)
+	if _, ok := g.symbols["foo"]; ok {
+		t.Error("symbol 'foo' should not exist after failed gate")
+	}
+}
+
+func TestDefineWithTestsErrorGate(t *testing.T) {
+	g := testGraphWithLibrary(t)
+
+	tests := []TestInput{
+		{Name: "errors", Expr: "(add 1 \"x\")"},
+	}
+	_, err := g.DefineWithTests("foo", "42", tests)
+	if err == nil {
+		t.Fatal("expected error from erroring test")
+	}
+	if !strings.Contains(err.Error(), "test \"errors\" failed") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestDefineWithTestsRestrictsScope(t *testing.T) {
+	g := testGraphWithLibrary(t)
+
+	// Define a non-base symbol
+	g.Define("helper", "(fn (x) x)")
+
+	// Try to define with a test referencing the non-base symbol
+	tests := []TestInput{
+		{Name: "uses helper", Expr: "(eq (helper 1) 1)"},
+	}
+	_, err := g.DefineWithTests("foo", "42", tests)
+	if err == nil {
+		t.Fatal("expected error: test references non-base symbol")
+	}
+	if !strings.Contains(err.Error(), "test expressions can only reference") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestDefineWithTestsRollback(t *testing.T) {
+	g := testGraphWithLibrary(t)
+
+	// Define foo first
+	g.Define("foo", "1")
+	oldNodeID := g.symbols["foo"]
+
+	// Redefine foo with a failing test
+	tests := []TestInput{
+		{Name: "wrong", Expr: "(eq foo 999)"},
+	}
+	_, err := g.DefineWithTests("foo", "2", tests)
+	if err == nil {
+		t.Fatal("expected error from failing test")
+	}
+
+	// foo should still point to old node
+	if g.symbols["foo"] != oldNodeID {
+		t.Errorf("foo should still point to old node after rollback")
+	}
+
+	// Old value should still be accessible
+	val, evalErr := g.Eval("foo")
+	if evalErr != nil {
+		t.Fatal(evalErr)
+	}
+	if val.Int != 1 {
+		t.Errorf("foo = %d, want 1", val.Int)
+	}
+}
+
+func TestDefineWithTestsNoTestsBackwardCompat(t *testing.T) {
+	g := testGraph(t)
+	node, err := g.Define("foo", "42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(node.Tests) != 0 {
+		t.Errorf("expected 0 tests, got %d", len(node.Tests))
+	}
+}
+
+func TestRefreshAllCarriesForwardTests(t *testing.T) {
+	g := testGraphWithBase(t)
+
+	// Define a with a value, then b depends on a, with a resilient test
+	g.DefineWithTests("a", "1", []TestInput{
+		{Name: "is positive", Expr: "(gt a 0)"},
+	})
+	g.DefineWithTests("b", "(add a 1)", []TestInput{
+		{Name: "is positive", Expr: "(gt b 0)"},
+	})
+
+	// Redefine a
+	g.Define("a", "10")
+
+	// Refresh b — tests should carry forward and pass
+	result, err := g.RefreshAll([]string{"a"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// b should have been refreshed
+	found := false
+	for _, name := range result.Refreshed {
+		if name == "b" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected b to be refreshed")
+	}
+
+	// b's new node should still have the test
+	newBNodeID := g.symbols["b"]
+	newBNode := g.nodes[newBNodeID]
+	if len(newBNode.Tests) != 1 {
+		t.Fatalf("expected 1 test after refresh, got %d", len(newBNode.Tests))
+	}
+	if newBNode.Tests[0].Name != "is positive" {
+		t.Errorf("test name = %q after refresh", newBNode.Tests[0].Name)
+	}
+
+	// b should now evaluate to 11 (add 10 1)
+	bVal, _ := g.EvalSymbol("b")
+	if bVal.Int != 11 {
+		t.Errorf("b = %d, want 11", bVal.Int)
+	}
+}
+
+// --- Refine tests ---
+
+func testGraphWithBase(t *testing.T) *Graph {
+	t.Helper()
+	dir := t.TempDir()
+	baseContent := `(define inc (fn (x) (add x 1)))
+
+(define dec (fn (x) (sub x 1)))
+
+(define not (fn (x) (if x false true)))
+`
+	os.WriteFile(filepath.Join(dir, "base.logos"), []byte(baseContent), 0644)
+	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\n"), 0644)
+
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { g.Close() })
+	return g
+}
+
+func TestRefineAddTest(t *testing.T) {
+	g := testGraphWithBase(t)
+
+	// Define a symbol without tests
+	node, err := g.Define("double", "(fn (x) (mul x 2))")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(node.Tests) != 0 {
+		t.Fatal("expected no tests initially")
+	}
+
+	// Refine to add a test
+	newNode, propagate, err := g.Refine("double", "", []TestInput{{Name: "doubles 3", Expr: "(eq (double 3) 6)"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newNode.ID == node.ID {
+		t.Error("expected new node ID")
+	}
+	if len(newNode.Tests) != 1 {
+		t.Fatalf("expected 1 test, got %d", len(newNode.Tests))
+	}
+	if newNode.Tests[0].Name != "doubles 3" {
+		t.Errorf("test name = %q", newNode.Tests[0].Name)
+	}
+	// Only tests changed → propagate = true
+	if !propagate {
+		t.Error("expected propagate = true when only tests changed")
+	}
+	// Symbol should point to new node
+	if g.symbols["double"] != newNode.ID {
+		t.Error("symbol not updated")
+	}
+}
+
+func TestRefineRemoveTest(t *testing.T) {
+	g := testGraphWithBase(t)
+
+	// Define with tests
+	node, err := g.DefineWithTests("double", "(fn (x) (mul x 2))", []TestInput{
+		{Name: "doubles 3", Expr: "(eq (double 3) 6)"},
+		{Name: "doubles 0", Expr: "(eq (double 0) 0)"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(node.Tests) != 2 {
+		t.Fatalf("expected 2 tests, got %d", len(node.Tests))
+	}
+
+	// Refine to remove one test
+	newNode, propagate, err := g.Refine("double", "", nil, []string{"doubles 3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(newNode.Tests) != 1 {
+		t.Fatalf("expected 1 test after removal, got %d", len(newNode.Tests))
+	}
+	if newNode.Tests[0].Name != "doubles 0" {
+		t.Errorf("remaining test = %q, want 'doubles 0'", newNode.Tests[0].Name)
+	}
+	if !propagate {
+		t.Error("expected propagate = true when only tests changed")
+	}
+}
+
+func TestRefineExprOnly(t *testing.T) {
+	g := testGraphWithBase(t)
+
+	// Define with a test
+	node, err := g.DefineWithTests("answer", "42", []TestInput{
+		{Name: "is 42", Expr: "(eq answer 42)"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Refine to change expression — test should carry forward
+	newNode, propagate, err := g.Refine("answer", "43", nil, nil)
+	if err != nil {
+		// Test gate should fail: answer is now 43 but test checks for 42
+		// This is expected! The test should fail.
+		t.Logf("expected gate failure: %v", err)
+
+		// Verify rollback
+		if g.symbols["answer"] != node.ID {
+			t.Error("symbol should still point to original node after gate failure")
+		}
+		return
+	}
+	// If we get here, it means the test passed with the new expr,
+	// which would be wrong for this case.
+	_ = newNode
+	_ = propagate
+	t.Fatal("expected gate failure when changing expr breaks existing test")
+}
+
+func TestRefineExprCarriesForwardTests(t *testing.T) {
+	g := testGraphWithBase(t)
+
+	// Define with a test that will still pass after expr change
+	_, err := g.DefineWithTests("val", "(add 1 2)", []TestInput{
+		{Name: "is positive", Expr: "(gt val 0)"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Refine expression to a different positive number — test still passes
+	newNode, propagate, err := g.Refine("val", "(add 10 20)", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(newNode.Tests) != 1 {
+		t.Fatalf("expected 1 test carried forward, got %d", len(newNode.Tests))
+	}
+	if newNode.Tests[0].Name != "is positive" {
+		t.Errorf("test name = %q", newNode.Tests[0].Name)
+	}
+	if newNode.Source != "(add 10 20)" {
+		t.Errorf("source = %q", newNode.Source)
+	}
+	// Only expr changed → propagate = true
+	if !propagate {
+		t.Error("expected propagate = true when only expr changed")
+	}
+}
+
+func TestRefineExprAndTestNoPropagation(t *testing.T) {
+	g := testGraphWithBase(t)
+
+	// Define a symbol
+	_, err := g.Define("val", "10")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Refine both expr and add test simultaneously
+	newNode, propagate, err := g.Refine("val", "20", []TestInput{
+		{Name: "is 20", Expr: "(eq val 20)"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(newNode.Tests) != 1 {
+		t.Fatalf("expected 1 test, got %d", len(newNode.Tests))
+	}
+	// Both expr and tests changed → propagate = false
+	if propagate {
+		t.Error("expected propagate = false when both expr and tests changed")
+	}
+}
+
+func TestRefineGateFailure(t *testing.T) {
+	g := testGraphWithBase(t)
+
+	// Define with a test
+	origNode, err := g.DefineWithTests("val", "42", []TestInput{
+		{Name: "is 42", Expr: "(eq val 42)"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Try to add a test that fails
+	_, _, err = g.Refine("val", "", []TestInput{
+		{Name: "is 100", Expr: "(eq val 100)"},
+	}, nil)
+	if err == nil {
+		t.Fatal("expected gate failure for failing test")
+	}
+	if !strings.Contains(err.Error(), "is 100") {
+		t.Errorf("error should mention failing test: %v", err)
+	}
+
+	// Original node should be preserved
+	if g.symbols["val"] != origNode.ID {
+		t.Error("symbol should still point to original node after gate failure")
+	}
+	currentNode := g.nodes[g.symbols["val"]]
+	if len(currentNode.Tests) != 1 {
+		t.Errorf("expected 1 test preserved, got %d", len(currentNode.Tests))
+	}
+}
+
+func TestRefineUnknownSymbol(t *testing.T) {
+	g := testGraphWithBase(t)
+
+	_, _, err := g.Refine("nonexistent", "42", nil, nil)
+	if err == nil {
+		t.Fatal("expected error for unknown symbol")
+	}
+	if !strings.Contains(err.Error(), "unknown symbol") {
+		t.Errorf("error = %v", err)
+	}
+}
+
+func TestRefineNoChanges(t *testing.T) {
+	g := testGraphWithBase(t)
+
+	g.Define("val", "42")
+
+	_, _, err := g.Refine("val", "", nil, nil)
+	if err == nil {
+		t.Fatal("expected error for no changes")
+	}
+	if !strings.Contains(err.Error(), "no changes") {
+		t.Errorf("error = %v", err)
+	}
+}
+
+func TestRefineDuplicateTestName(t *testing.T) {
+	g := testGraphWithBase(t)
+
+	_, err := g.DefineWithTests("val", "42", []TestInput{
+		{Name: "is 42", Expr: "(eq val 42)"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Try to add a test with the same name
+	_, _, err = g.Refine("val", "", []TestInput{
+		{Name: "is 42", Expr: "(eq val 42)"},
+	}, nil)
+	if err == nil {
+		t.Fatal("expected error for duplicate test name")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("error = %v", err)
+	}
+}
+
+func TestRefineRemoveNonexistentTest(t *testing.T) {
+	g := testGraphWithBase(t)
+
+	g.Define("val", "42")
+
+	_, _, err := g.Refine("val", "", nil, []string{"no such test"})
+	if err == nil {
+		t.Fatal("expected error for nonexistent test removal")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error = %v", err)
+	}
+}
+
+func TestRefineLogReplay(t *testing.T) {
+	dir := t.TempDir()
+	baseContent := `(define inc (fn (x) (add x 1)))
+`
+	os.WriteFile(filepath.Join(dir, "base.logos"), []byte(baseContent), 0644)
+	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\n"), 0644)
+
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Define, then refine to add a test
+	g.Define("double", "(fn (x) (mul x 2))")
+	_, _, err = g.Refine("double", "", []TestInput{
+		{Name: "doubles 5", Expr: "(eq (double 5) 10)"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	g.Close()
+
+	// Reload and verify tests survived
+	g2, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g2.Close()
+
+	nodeID := g2.symbols["double"]
+	node := g2.nodes[nodeID]
+	if len(node.Tests) != 1 {
+		t.Fatalf("expected 1 test after replay, got %d", len(node.Tests))
+	}
+	if node.Tests[0].Name != "doubles 5" {
+		t.Errorf("test name = %q", node.Tests[0].Name)
+	}
+}
+
+// --- Symbol Status tests ---
+
+func TestSymbolStatusUntested(t *testing.T) {
+	g := testGraphWithBase(t)
+
+	g.Define("val", "42")
+
+	status, ok := g.GetSymbolStatus("val")
+	if !ok {
+		t.Fatal("expected status to exist")
+	}
+	if status != StatusUntested {
+		t.Errorf("expected Untested, got %s", status)
+	}
+}
+
+func TestSymbolStatusGreenAfterDefineWithTests(t *testing.T) {
+	g := testGraphWithBase(t)
+
+	g.DefineWithTests("val", "42", []TestInput{
+		{Name: "is 42", Expr: "(eq val 42)"},
+	})
+
+	status, ok := g.GetSymbolStatus("val")
+	if !ok {
+		t.Fatal("expected status to exist")
+	}
+	if status != StatusGreen {
+		t.Errorf("expected Green, got %s", status)
+	}
+
+	// val should appear in GreenSymbols
+	greens := g.GreenSymbols()
+	found := false
+	for _, name := range greens {
+		if name == "val" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("val not found in GreenSymbols")
+	}
+}
+
+func TestSymbolStatusGreenAfterRefine(t *testing.T) {
+	g := testGraphWithBase(t)
+
+	g.Define("val", "42")
+
+	status, _ := g.GetSymbolStatus("val")
+	if status != StatusUntested {
+		t.Errorf("expected Untested initially, got %s", status)
+	}
+
+	// Refine to add a test → should become Green
+	g.Refine("val", "", []TestInput{
+		{Name: "is 42", Expr: "(eq val 42)"},
+	}, nil)
+
+	status, _ = g.GetSymbolStatus("val")
+	if status != StatusGreen {
+		t.Errorf("expected Green after refine, got %s", status)
+	}
+}
+
+func TestSymbolStatusAfterDelete(t *testing.T) {
+	g := testGraphWithBase(t)
+
+	g.Define("val", "42")
+	_, ok := g.GetSymbolStatus("val")
+	if !ok {
+		t.Fatal("expected status before delete")
+	}
+
+	g.Delete("val")
+	_, ok = g.GetSymbolStatus("val")
+	if ok {
+		t.Error("expected no status after delete")
+	}
+}
+
+func TestSymbolStatusAfterReplay(t *testing.T) {
+	dir := t.TempDir()
+	baseContent := `(define inc (fn (x) (add x 1)))
+`
+	os.WriteFile(filepath.Join(dir, "base.logos"), []byte(baseContent), 0644)
+	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\n"), 0644)
+
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Define with test, then close
+	g.DefineWithTests("double", "(fn (x) (mul x 2))", []TestInput{
+		{Name: "doubles 5", Expr: "(eq (double 5) 10)"},
+	})
+	g.Define("plain", "99")
+	g.Close()
+
+	// Reload
+	g2, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g2.Close()
+
+	// double should be Green (has tests)
+	status, _ := g2.GetSymbolStatus("double")
+	if status != StatusGreen {
+		t.Errorf("expected Green for double after replay, got %s", status)
+	}
+
+	// plain should be Untested (no tests)
+	status, _ = g2.GetSymbolStatus("plain")
+	if status != StatusUntested {
+		t.Errorf("expected Untested for plain after replay, got %s", status)
+	}
+}
+
+func TestRedSymbolsEmpty(t *testing.T) {
+	g := testGraphWithBase(t)
+
+	g.Define("val", "42")
+	g.DefineWithTests("double", "(fn (x) (mul x 2))", []TestInput{
+		{Name: "doubles 3", Expr: "(eq (double 3) 6)"},
+	})
+
+	reds := g.RedSymbols()
+	if len(reds) != 0 {
+		t.Errorf("expected 0 red symbols, got %d: %v", len(reds), reds)
+	}
+}
+
+func TestSymbolStatusString(t *testing.T) {
+	if StatusUntested.String() != "untested" {
+		t.Errorf("StatusUntested = %q", StatusUntested.String())
+	}
+	if StatusGreen.String() != "green" {
+		t.Errorf("StatusGreen = %q", StatusGreen.String())
+	}
+	if StatusRed.String() != "red" {
+		t.Errorf("StatusRed = %q", StatusRed.String())
+	}
+}
+
+// --- Cascade tests ---
+
+func TestCascadeAllContracted(t *testing.T) {
+	// A → B → C, all with passing contracts. Change A → all auto-refresh.
+	g := testGraphWithBase(t)
+
+	// A: a value
+	g.DefineWithTests("a", "1", []TestInput{
+		{Name: "is positive", Expr: "(gt a 0)"},
+	})
+	// B: depends on A
+	g.DefineWithTests("b", "(add a 10)", []TestInput{
+		{Name: "is positive", Expr: "(gt b 0)"},
+	})
+	// C: depends on B
+	g.DefineWithTests("c", "(add b 100)", []TestInput{
+		{Name: "is positive", Expr: "(gt c 0)"},
+	})
+
+	// Redefine A to 2 (still positive, all tests should pass)
+	g.Define("a", "2")
+
+	result, err := g.RefreshAll([]string{"a"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Both B and C should be refreshed
+	if len(result.Refreshed) != 2 {
+		t.Fatalf("expected 2 refreshed, got %d: %v", len(result.Refreshed), result.Refreshed)
+	}
+	if len(result.Red) != 0 {
+		t.Errorf("expected 0 red, got %v", result.Red)
+	}
+	if len(result.Stale) != 0 {
+		t.Errorf("expected 0 stale, got %v", result.Stale)
+	}
+
+	// Verify values: A=2, B=12, C=112
+	bVal, _ := g.EvalSymbol("b")
+	if bVal.Int != 12 {
+		t.Errorf("b = %d, want 12", bVal.Int)
+	}
+	cVal, _ := g.EvalSymbol("c")
+	if cVal.Int != 112 {
+		t.Errorf("c = %d, want 112", cVal.Int)
+	}
+
+	// All should be Green
+	if s, _ := g.GetSymbolStatus("b"); s != StatusGreen {
+		t.Errorf("b status = %s, want Green", s)
+	}
+	if s, _ := g.GetSymbolStatus("c"); s != StatusGreen {
+		t.Errorf("c status = %s, want Green", s)
+	}
+}
+
+func TestCascadeCircuitBreaker(t *testing.T) {
+	// A → B → C, all with contracts. Change A in a way that breaks B's test.
+	// B → Red, C unchanged.
+	g := testGraphWithBase(t)
+
+	// A: a value
+	g.DefineWithTests("a", "5", []TestInput{
+		{Name: "is positive", Expr: "(gt a 0)"},
+	})
+	// B: depends on A, test requires B > 10
+	g.DefineWithTests("b", "(add a 10)", []TestInput{
+		{Name: "b > 10", Expr: "(gt b 10)"},
+	})
+	// C: depends on B
+	g.DefineWithTests("c", "(add b 100)", []TestInput{
+		{Name: "c > 100", Expr: "(gt c 100)"},
+	})
+
+	// Redefine A to 0 → B becomes (add 0 10) = 10, test (gt b 10) fails (10 is not > 10)
+	g.Define("a", "0")
+
+	result, err := g.RefreshAll([]string{"a"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// B should be Red
+	if len(result.Red) != 1 || result.Red[0] != "b" {
+		t.Errorf("expected Red = [b], got %v", result.Red)
+	}
+
+	// C should not be refreshed (circuit breaker stopped at B)
+	for _, name := range result.Refreshed {
+		if name == "c" {
+			t.Error("c should not have been refreshed")
+		}
+	}
+
+	// B should be Red status
+	if s, _ := g.GetSymbolStatus("b"); s != StatusRed {
+		t.Errorf("b status = %s, want Red", s)
+	}
+
+	// B should still have old value (add 5 10 = 15, not add 0 10 = 10)
+	bVal, _ := g.EvalSymbol("b")
+	if bVal.Int != 15 {
+		t.Errorf("b = %d, want 15 (old value preserved)", bVal.Int)
+	}
+}
+
+func TestCascadeFirewall(t *testing.T) {
+	// A → B → C. B has no contract. B stops propagation.
+	g := testGraphWithBase(t)
+
+	g.DefineWithTests("a", "1", []TestInput{
+		{Name: "is positive", Expr: "(gt a 0)"},
+	})
+	// B has no tests — untested firewall
+	g.Define("b", "(add a 10)")
+	// C depends on B, has tests
+	g.DefineWithTests("c", "(add b 100)", []TestInput{
+		{Name: "c > 100", Expr: "(gt c 100)"},
+	})
+
+	// Redefine A
+	g.Define("a", "2")
+
+	result, err := g.RefreshAll([]string{"a"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// B should be stale (no contract)
+	if len(result.Stale) != 1 || result.Stale[0] != "b" {
+		t.Errorf("expected Stale = [b], got %v", result.Stale)
+	}
+
+	// C should not be refreshed (firewall at B)
+	for _, name := range result.Refreshed {
+		if name == "c" {
+			t.Error("c should not have been refreshed")
+		}
+	}
+
+	// B value should be old (add 1 10 = 11, not add 2 10 = 12) since it wasn't refreshed
+	bVal, _ := g.EvalSymbol("b")
+	if bVal.Int != 11 {
+		t.Errorf("b = %d, want 11 (old value, not refreshed)", bVal.Int)
+	}
+}
+
+func TestCascadeGreenAfterAutoRefresh(t *testing.T) {
+	// Verify that successfully auto-refreshed symbols are Green.
+	g := testGraphWithBase(t)
+
+	g.DefineWithTests("a", "1", []TestInput{
+		{Name: "is positive", Expr: "(gt a 0)"},
+	})
+	g.DefineWithTests("b", "(add a 10)", []TestInput{
+		{Name: "is positive", Expr: "(gt b 0)"},
+	})
+
+	// Redefine A
+	g.Define("a", "5")
+	g.RefreshAll([]string{"a"}, false)
+
+	s, _ := g.GetSymbolStatus("b")
+	if s != StatusGreen {
+		t.Errorf("b status = %s after auto-refresh, want Green", s)
 	}
 }

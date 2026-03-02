@@ -185,6 +185,14 @@ func (c *Core) handleRequest(msg map[string]any) map[string]any {
 		resp = c.handleEval(id, msg)
 	case "define":
 		resp = c.handleDefine(id, msg)
+	case "refine":
+		resp = c.handleRefine(id, msg)
+	case "symbol-status":
+		resp = c.handleSymbolStatus(id, msg)
+	case "red-symbols":
+		resp = c.handleRedSymbols(id, msg)
+	case "green-symbols":
+		resp = c.handleGreenSymbols(id, msg)
 	case "delete":
 		resp = c.handleDelete(id, msg)
 	case "refresh-all":
@@ -275,9 +283,13 @@ func (c *Core) coreManual(id string) map[string]any {
 			"version": "3.0.0",
 			"ops": map[string]any{
 				"eval":              "Evaluate a logos expression. Params: expr (string)",
-				"define":            "Define a named symbol. Params: name (string), expr (string)",
+				"define":            "Define a named symbol. Params: name (string), expr (string), tests (optional, [{name, expr}])",
+				"refine":            "Evolve an existing symbol with deltas. Params: name (string), expr (optional string), add_test (optional {name, expr}), remove_test (optional string)",
 				"delete":            "Delete a named symbol. Params: name (string)",
-				"refresh-all":       "Re-resolve dependents of target symbols. Params: targets ([]string), dry (bool, optional)",
+				"refresh-all":       "Re-resolve dependents of target symbols. Auto-refreshes contracted symbols, marks Red on failure. Params: targets ([]string), dry (bool, optional)",
+				"symbol-status":     "Query contract status of a symbol. Params: name (string). Returns: green/red/untested",
+				"red-symbols":       "List all symbols with failed contracts (Red status).",
+				"green-symbols":     "List all symbols with passing contracts (Green status).",
 				"library-create":    "Create a new library. Params: name (string)",
 				"library-delete":    "Delete an empty library. Params: name (string)",
 				"library-open":      "Open a library for writing. Params: name (string)",
@@ -355,15 +367,119 @@ func (c *Core) handleDefine(id string, msg map[string]any) map[string]any {
 	if !ok {
 		return errorResponse(id, "define: missing 'expr' string")
 	}
-	node, err := c.graph.Define(name, expr)
+
+	// Parse optional tests parameter: [{name: "...", expr: "..."}, ...]
+	var tests []TestInput
+	if testsRaw, ok := msg["tests"].([]any); ok {
+		for i, tr := range testsRaw {
+			td, ok := tr.(map[string]any)
+			if !ok {
+				return errorResponse(id, fmt.Sprintf("define: tests[%d] must be object", i))
+			}
+			tName, _ := td["name"].(string)
+			tExpr, _ := td["expr"].(string)
+			if tName == "" || tExpr == "" {
+				return errorResponse(id, fmt.Sprintf("define: tests[%d] requires 'name' and 'expr' strings", i))
+			}
+			tests = append(tests, TestInput{Name: tName, Expr: tExpr})
+		}
+	}
+
+	node, err := c.graph.DefineWithTests(name, expr, tests)
 	if err != nil {
 		return errorResponse(id, err.Error())
+	}
+
+	resp := map[string]any{
+		"id": id,
+		"ok": true,
+		"value": map[string]any{
+			"node_id": node.ID,
+			"name":    name,
+		},
+	}
+	if len(node.Tests) > 0 {
+		resp["value"].(map[string]any)["tests"] = len(node.Tests)
+		resp["value"].(map[string]any)["status"] = "green"
+	}
+	return resp
+}
+
+func (c *Core) handleRefine(id string, msg map[string]any) map[string]any {
+	name, ok := msg["name"].(string)
+	if !ok {
+		return errorResponse(id, "refine: missing 'name' string")
+	}
+	newExpr, _ := msg["expr"].(string) // optional
+
+	var addTests []TestInput
+	if at, ok := msg["add_test"].(map[string]any); ok {
+		tName, _ := at["name"].(string)
+		tExpr, _ := at["expr"].(string)
+		if tName == "" || tExpr == "" {
+			return errorResponse(id, "refine: add_test requires 'name' and 'expr' strings")
+		}
+		addTests = append(addTests, TestInput{Name: tName, Expr: tExpr})
+	}
+
+	var removeTests []string
+	if rt, ok := msg["remove_test"].(string); ok {
+		removeTests = append(removeTests, rt)
+	}
+
+	node, propagate, err := c.graph.Refine(name, newExpr, addTests, removeTests)
+	if err != nil {
+		return errorResponse(id, err.Error())
+	}
+
+	resp := map[string]any{
+		"id": id,
+		"ok": true,
+		"value": map[string]any{
+			"node_id":   node.ID,
+			"name":      name,
+			"propagate": propagate,
+		},
+	}
+	if len(node.Tests) > 0 {
+		resp["value"].(map[string]any)["tests"] = len(node.Tests)
+		resp["value"].(map[string]any)["status"] = "green"
+	}
+	return resp
+}
+
+func (c *Core) handleSymbolStatus(id string, msg map[string]any) map[string]any {
+	name, ok := msg["name"].(string)
+	if !ok {
+		return errorResponse(id, "symbol-status: missing 'name' string")
+	}
+	status, exists := c.graph.GetSymbolStatus(name)
+	if !exists {
+		return errorResponse(id, fmt.Sprintf("symbol-status: unknown symbol: %s", name))
 	}
 	return map[string]any{
 		"id":    id,
 		"ok":    true,
-		"value": map[string]any{"node_id": node.ID, "name": name},
+		"value": map[string]any{"name": name, "status": status.String()},
 	}
+}
+
+func (c *Core) handleRedSymbols(id string, msg map[string]any) map[string]any {
+	reds := c.graph.RedSymbols()
+	result := make([]any, len(reds))
+	for i, name := range reds {
+		result[i] = name
+	}
+	return map[string]any{"id": id, "ok": true, "value": result}
+}
+
+func (c *Core) handleGreenSymbols(id string, msg map[string]any) map[string]any {
+	greens := c.graph.GreenSymbols()
+	result := make([]any, len(greens))
+	for i, name := range greens {
+		result[i] = name
+	}
+	return map[string]any{"id": id, "ok": true, "value": result}
 }
 
 func (c *Core) handleDelete(id string, msg map[string]any) map[string]any {
@@ -400,10 +516,22 @@ func (c *Core) handleRefreshAll(id string, msg map[string]any) map[string]any {
 	for i, name := range result.Refreshed {
 		refreshed[i] = name
 	}
+	red := make([]any, len(result.Red))
+	for i, name := range result.Red {
+		red[i] = name
+	}
+	stale := make([]any, len(result.Stale))
+	for i, name := range result.Stale {
+		stale[i] = name
+	}
 	return map[string]any{
-		"id":    id,
-		"ok":    true,
-		"value": map[string]any{"refreshed": refreshed},
+		"id": id,
+		"ok": true,
+		"value": map[string]any{
+			"refreshed": refreshed,
+			"red":       red,
+			"stale":     stale,
+		},
 	}
 }
 

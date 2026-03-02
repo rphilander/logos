@@ -83,7 +83,64 @@ func handleDefine(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallTo
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	resp, err := send(map[string]any{"op": "define", "name": name, "expr": expr})
+	req := map[string]any{"op": "define", "name": name, "expr": expr}
+	// Pass optional tests array through to core
+	args := request.GetArguments()
+	if tests, ok := args["tests"]; ok {
+		req["tests"] = tests
+	}
+	resp, err := send(req)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return formatResult(resp)
+}
+
+func handleRefine(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, err := request.RequireString("name")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	req := map[string]any{"op": "refine", "name": name}
+	args := request.GetArguments()
+	if expr, ok := args["expr"].(string); ok && expr != "" {
+		req["expr"] = expr
+	}
+	if addTest, ok := args["add_test"]; ok {
+		req["add_test"] = addTest
+	}
+	if removeTest, ok := args["remove_test"].(string); ok {
+		req["remove_test"] = removeTest
+	}
+	resp, err := send(req)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return formatResult(resp)
+}
+
+func handleSymbolStatus(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, err := request.RequireString("name")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	resp, err := send(map[string]any{"op": "symbol-status", "name": name})
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return formatResult(resp)
+}
+
+func handleRedSymbols(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	resp, err := send(map[string]any{"op": "red-symbols"})
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return formatResult(resp)
+}
+
+func handleGreenSymbols(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	resp, err := send(map[string]any{"op": "green-symbols"})
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -312,8 +369,56 @@ func main() {
 				mcp.Required(),
 				mcp.Description("S-expression for the symbol's value"),
 			),
+			mcp.WithArray("tests",
+				mcp.Description("Optional contract tests. Array of {name, expr} objects. All must pass or define fails."),
+			),
 		),
 		handleDefine,
+	)
+
+	s.AddTool(
+		mcp.NewTool("logos_refine",
+			mcp.WithDescription("Evolve an existing symbol with deltas. Carries forward unchanged fields. Tests are a gate: all must pass or refine fails."),
+			mcp.WithString("name",
+				mcp.Required(),
+				mcp.Description("Symbol name to refine"),
+			),
+			mcp.WithString("expr",
+				mcp.Description("New expression (omit to carry forward current)"),
+			),
+			mcp.WithObject("add_test",
+				mcp.Description("Test to add: {name: string, expr: string}"),
+			),
+			mcp.WithString("remove_test",
+				mcp.Description("Name of test to remove"),
+			),
+		),
+		handleRefine,
+	)
+
+	s.AddTool(
+		mcp.NewTool("logos_symbol_status",
+			mcp.WithDescription("Query the contract status of a symbol: green (tests pass, deps current), red (stale deps), or untested (no contract)."),
+			mcp.WithString("name",
+				mcp.Required(),
+				mcp.Description("Symbol name to query"),
+			),
+		),
+		handleSymbolStatus,
+	)
+
+	s.AddTool(
+		mcp.NewTool("logos_red_symbols",
+			mcp.WithDescription("List all symbols with Red status (contract exists but deps are stale). These are the LLM's work list."),
+		),
+		handleRedSymbols,
+	)
+
+	s.AddTool(
+		mcp.NewTool("logos_green_symbols",
+			mcp.WithDescription("List all symbols with Green status (contract exists, all tests pass, deps current)."),
+		),
+		handleGreenSymbols,
 	)
 
 	s.AddTool(
@@ -355,7 +460,7 @@ func main() {
 
 	s.AddTool(
 		mcp.NewTool("logos_refresh_all",
-			mcp.WithDescription("Re-resolve all symbols that depend on the given targets. Creates new nodes, never mutates."),
+			mcp.WithDescription("Re-resolve all symbols that depend on the given targets. Creates new nodes, never mutates. Auto-refreshes contracted symbols (test gate), marks Red on failure, stops at untested symbols."),
 			mcp.WithArray("targets",
 				mcp.Required(),
 				mcp.Description("List of symbol names or node IDs to refresh dependents of"),
