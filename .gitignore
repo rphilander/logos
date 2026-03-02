@@ -6,6 +6,7 @@ mod-time/mod-time
 mod-http-server/mod-http-server
 mod-sqlite/mod-sqlite
 mod-mcp-server/mod-mcp-server
+mod-fs/mod-fs
 
 # Session log (ephemeral)
 data/log.logos

@@ -12,9 +12,6 @@
 
 (define lang-search-in (fn (query depth root) (loop ((stack (list (list root "" "" (list)))) (acc (list))) (if (empty? stack) acc (let (entry (head stack) rest-stack (rest stack) node (head entry) path (nth entry 1) parent-name (nth entry 2) sibling-symbols (nth entry 3) name (get node "name") current-path (if (eq path "") name (concat path " > " name)) is-match (lang-search-matches? node query) own-result (if is-match (list (lang-search-result node current-path depth parent-name sibling-symbols)) (list)) members (get node "members") concepts (get node "concepts") all-children (append (if (nil? members) (list) members) (if (nil? concepts) (list) concepts)) child-symbols (map (fn (c) (get c "symbol")) all-children) child-entries (map (fn (child) (list child current-path name child-symbols)) all-children)) (recur (append child-entries rest-stack) (append acc own-result)))))))
 
-(define lang (dict :symbol "lang" :name "Logos Language Reference" :description "Self-validating language reference for the logos programming environment." :members (list lang-syntax lang-types lang-forms lang-builtins lang-concepts)))
-
-(define lang-search (fn (query & opts) (let (depth (if (empty? opts) 1 (head opts)) roots (if (le (len opts) 1) (list lang) (nth opts 1))) (fold (fn (acc root) (append acc (lang-search-in query depth root))) (list) roots))))
 
 (define lang-ex-int-literal (dict "name" "integer literals" "expr" "(eq (type 42) :int)"))
 
@@ -721,4 +718,8 @@
 (define lang-concept-graph (dict :symbol "lang-concept-graph" :name "Graph" :description "Every definition becomes a node in a dependency-tracked graph. Nodes are immutable — redefining a symbol creates a new node and supersedes the old one. The graph tracks which nodes reference which: ref-by shows reverse dependencies, and refresh-all re-resolves dependents when a symbol changes. After redefining a node, its dependents hold stale references until refreshed. This makes change propagation explicit rather than automatic. The graph is the foundation: it enables introspection (node-expr, symbols), impact analysis (ref-by, dependents), and the library persistence system." :keywords (list "graph" "dependency" "node" "immutable" "refresh" "stale" "propagation" "supersede" "redefine") :examples (list lang-ex-graph-node-refs lang-ex-graph-dependencies) :tests (list lang-test-graph-immutable-nodes) :see-also (list (link 'lang-builtin-symbols) (link 'lang-builtin-ref-by) (link 'lang-builtin-node-expr))))
 
 (define lang-concepts (dict :symbol "lang-concepts" :name "Concepts" :description "Key concepts that cut across syntax, types, forms, and builtins. How functions capture scope (closures), how symbols become references (define-time resolution), how to iterate without recursion (loop/recur), how cross-references work without cycles (link/follow indirection), and how the dependency graph tracks and propagates changes." :keywords (list "concepts" "design" "semantics" "how it works" "mental model") :members (list lang-concept-closures lang-concept-define-time lang-concept-iteration lang-concept-indirection lang-concept-graph)))
+
+(define lang (dict :symbol "lang" :name "Logos Language Reference" :description "Self-validating language reference for the logos programming environment." :members (list lang-syntax lang-types lang-forms lang-builtins lang-concepts)))
+
+(define lang-search (fn (query & opts) (let (depth (if (empty? opts) 1 (head opts)) roots (if (le (len opts) 1) (list lang) (nth opts 1))) (fold (fn (acc root) (append acc (lang-search-in query depth root))) (list) roots))))
 
