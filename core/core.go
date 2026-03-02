@@ -293,12 +293,13 @@ func (c *Core) coreManual(id string) map[string]any {
 				"put", "has?",
 				"split-once",
 				"type",
-				"symbols", "node-expr", "ref-by",
+				"symbols", "node-expr", "ref-by", "follow",
 				"assert", "traces",
+				"link", "link-target",
 			},
 			"forms": []any{
-				"if", "let", "letrec", "do", "fn", "form", "quote",
-				"apply", "sort-by",
+				"if", "let", "do", "fn", "form", "quote",
+				"apply", "sort-by", "loop", "recur",
 			},
 		},
 	}

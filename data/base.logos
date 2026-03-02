@@ -44,21 +44,21 @@
 
 (define dep-tree (fn (sym) (let (refs (uniq (collect-refs (node-expr sym)))) (map (fn (ref) (let (name (to-string ref) children (uniq (collect-refs (node-expr ref)))) (if (empty? children) (dict "name" name) (dict "name" name "deps" (map (fn (child) (dep-tree child)) children))))) refs))))
 
-(define fold (fn (f acc xs) (if (empty? xs) acc (fold f (f acc (head xs)) (rest xs)))))
+(define fold (fn (f acc xs) (loop ((acc acc) (xs xs)) (if (empty? xs) acc (recur (f acc (head xs)) (rest xs))))))
 
-(define map (fn (f xs) (letrec (go (fn (acc xs) (if (empty? xs) (reverse acc) (go (cons (f (head xs)) acc) (rest xs))))) (go (list) xs))))
+(define map (fn (f xs) (loop ((acc (list)) (xs xs)) (if (empty? xs) (reverse acc) (recur (cons (f (head xs)) acc) (rest xs))))))
 
-(define filter (fn (f xs) (letrec (go (fn (acc xs) (if (empty? xs) (reverse acc) (if (f (head xs)) (go (cons (head xs) acc) (rest xs)) (go acc (rest xs)))))) (go (list) xs))))
+(define filter (fn (f xs) (loop ((acc (list)) (xs xs)) (if (empty? xs) (reverse acc) (if (f (head xs)) (recur (cons (head xs) acc) (rest xs)) (recur acc (rest xs)))))))
 
 (define group-by (fn (f xs) (fold (fn (acc x) (let (k (to-string (f x)) existing (get acc k)) (put acc k (if (nil? existing) (list x) (append existing (list x)))))) (dict) xs)))
 
 (define starts-with? (fn (s prefix) (let (r (split-once prefix s)) (if (nil? r) false (eq (head r) "")))))
 
-(define ends-with? (fn (s suffix) (let (r (split-once suffix s)) (if (nil? r) false (if (eq (nth r 1) "") true (ends-with? (nth r 1) suffix))))))
+(define ends-with? (fn (s suffix) (loop ((s s)) (let (r (split-once suffix s)) (if (nil? r) false (if (eq (nth r 1) "") true (recur (nth r 1))))))))
 
-(define replace (fn (s old new) (let (r (split-once old s)) (if (nil? r) s (concat (head r) new (replace (nth r 1) old new))))))
+(define replace (fn (s old new) (loop ((acc "") (s s)) (let (r (split-once old s)) (if (nil? r) (concat acc s) (recur (concat acc (head r) new) (nth r 1)))))))
 
-(define split (fn (s sep) (let (r (split-once sep s)) (if (nil? r) (list s) (cons (head r) (split (nth r 1) sep))))))
+(define split (fn (s sep) (loop ((acc (list)) (s s)) (let (r (split-once sep s)) (if (nil? r) (reverse (cons s acc)) (recur (cons (head r) acc) (nth r 1)))))))
 
 (define join (fn (sep xs) (if (empty? xs) "" (fold (fn (acc x) (concat acc sep x)) (head xs) (rest xs)))))
 
@@ -68,9 +68,9 @@
 
 (define or (form (a b) (list (quote let) (list (quote __or-val__) a) (list (quote if) (quote __or-val__) (quote __or-val__) b))))
 
-(define cond (form (& pairs) (letrec (expand (fn (ps) (if (empty? ps) (quote nil) (list (quote if) (head ps) (nth ps 1) (expand (rest (rest ps))))))) (expand pairs))))
+(define cond (form (& pairs) (let (rev (reverse pairs) expanded (loop ((ps rev) (result (quote nil))) (if (empty? ps) result (recur (rest (rest ps)) (list (quote if) (nth ps 1) (head ps) result))))) expanded)))
 
-(define case (form (target & clauses) (letrec (expand (fn (cs) (if (empty? cs) (quote nil) (if (eq (len cs) 1) (head cs) (list (quote if) (list (quote eq) (quote __case-target__) (head cs)) (nth cs 1) (expand (rest (rest cs)))))))) (list (quote let) (list (quote __case-target__) target) (expand clauses)))))
+(define case (form (target & clauses) (let (rev (reverse clauses) has-default (eq (mod (len clauses) 2) 1) start-result (if has-default (head rev) (quote nil)) start-cs (if has-default (rest rev) rev) expanded (loop ((cs start-cs) (result start-result)) (if (empty? cs) result (recur (rest (rest cs)) (list (quote if) (list (quote eq) (quote __case-target__) (nth cs 1)) (head cs) result))))) (list (quote let) (list (quote __case-target__) target) expanded))))
 
 (define when (form (test body) (list (quote if) test body nil)))
 
@@ -88,7 +88,7 @@
 
 (define reverse (fn (xs) (fold (fn (acc x) (cons x acc)) (list) xs)))
 
-(define member? (fn (xs x) (if (empty? xs) false (if (eq (head xs) x) true (member? (rest xs) x)))))
+(define member? (fn (xs x) (loop ((xs xs)) (if (empty? xs) false (if (eq (head xs) x) true (recur (rest xs)))))))
 
 (define uniq (fn (xs) (if (empty? xs) (list) (let (sorted (sort-by identity xs)) (reverse (fold (fn (acc x) (if (eq (head acc) x) acc (cons x acc))) (list (head sorted)) (rest sorted)))))))
 

@@ -10,15 +10,11 @@ import (
 // Builtin is a function implemented in Go, called with eagerly evaluated arguments.
 type Builtin func(args []Value) (Value, error)
 
-// Resolver looks up a symbol name and returns its value if defined.
-type Resolver func(name string) (Value, bool)
-
 // NodeResolver looks up a node by ID and returns its expression AST.
 type NodeResolver func(nodeID string) (*Node, error)
 
 // Evaluator evaluates s-expression nodes.
 type Evaluator struct {
-	Resolve       Resolver
 	ResolveNode   NodeResolver
 	Builtins      map[string]Builtin
 	locals        []map[string]Value
@@ -50,24 +46,25 @@ func (e *Evaluator) lookupLocal(name string) (Value, bool) {
 type frameKind int
 
 const (
-	frameFnBody      frameKind = iota // entered fn body; holds scopeBase for cleanup/TCO
-	frameScopeCleanup                 // pop one scope on value pass-through (non-tail let/letrec)
+	frameFnBody      frameKind = iota // entered fn body; holds scopeBase for cleanup
+	frameScopeCleanup                 // pop one scope on value pass-through (non-tail let)
 	frameRef                          // evaluating node-ref expression; restore currentNodeID, tag fn/form
 	frameEvalHead                     // evaluated computed head; dispatch fn/form/error
 	frameBuiltinArg                   // evaluating builtin arguments one by one
 	frameFnArg                        // evaluating fn call arguments one by one
 	frameIfCond                       // evaluated if condition; pick branch
 	frameLetBind                      // evaluating let binding values sequentially
-	frameLetrecBind                   // evaluating letrec binding values sequentially
 	frameDo                           // evaluating do expressions sequentially
 	frameFormExpand                    // form body produced expansion value; convert to AST and eval
 	frameApplyFn                      // evaluated apply's fn arg; now eval list arg
 	frameApplyList                    // evaluated apply's list arg; enter fn body
+	frameLoopBind                     // evaluating loop binding values sequentially
+	frameLoop                         // loop body running; holds metadata for recur
+	frameRecurArg                     // evaluating recur argument values
 )
 
 type frame struct {
 	kind frameKind
-	tail bool // is this frame in tail position?
 
 	// frameFnBody
 	scopeBase   int    // len(e.locals) before pushing closure+bindings
@@ -97,10 +94,9 @@ type frame struct {
 	thenNode *Node
 	elseNode *Node
 
-	// frameLetBind / frameLetrecBind
+	// frameLetBind
 	bindings     map[string]Value
 	bindPairs    []*Node
-	bindNames    []string // letrec only: ordered names for back-patching
 	bindIdx      int
 	bodyNode     *Node
 	scopeIdx     int      // index into e.locals where bindings map lives
@@ -109,13 +105,21 @@ type frame struct {
 	doExprs []*Node
 	doIdx   int
 
-	// frameFormExpand (tail inherited from frame.tail)
+	// frameFormExpand
 
 	// frameApplyFn
 	applyListNode *Node
 
 	// frameApplyList
 	applyFn *FnValue
+
+	// frameLoopBind / frameLoop / frameRecurArg
+	loopNames   []string // binding names
+	loopBody    *Node    // body AST
+	loopScopeIdx int     // index into e.locals
+	recurArgs   []*Node  // recur arg AST nodes (frameRecurArg)
+	recurDone   []Value  // evaluated recur args so far
+	recurIdx    int      // current recur arg index
 }
 
 // evalState holds the loop variables for one eval loop iteration.
@@ -123,7 +127,6 @@ type frame struct {
 type evalState struct {
 	node       *Node
 	evaluating bool
-	tail       bool
 	result     Value
 	stack      []frame
 	err        error // set on eval error
@@ -171,27 +174,25 @@ func (e *Evaluator) CallFnWithValues(fn *FnValue, args []Value) (Value, error) {
 		e.currentNodeID = fn.NodeID
 	}
 
-	// Pre-seed the stack with a frameFnBody for TCO support
+	// Pre-seed the stack with a frameFnBody for scope cleanup
 	stack := []frame{{
 		kind:        frameFnBody,
-		tail:        true,
 		scopeBase:   scopeBase,
 		savedNodeID: prevNodeID,
 	}}
 
-	val, err := e.evalLoopWith(fn.Body, stack, true)
+	val, err := e.evalLoopWith(fn.Body, stack)
 	// Scope cleanup is handled by evalLoop via frameFnBody
 	return val, err
 }
 
 // evalLoop is the main iterative evaluation loop.
 func (e *Evaluator) evalLoop(startNode *Node) (Value, error) {
-	return e.evalLoopWith(startNode, nil, false)
+	return e.evalLoopWith(startNode, nil)
 }
 
 // evalLoopWith runs the iterative eval loop with an optional pre-seeded stack.
-// startTail indicates whether startNode is in tail position (true when called from CallFnWithValues).
-func (e *Evaluator) evalLoopWith(startNode *Node, stack []frame, startTail bool) (Value, error) {
+func (e *Evaluator) evalLoopWith(startNode *Node, stack []frame) (Value, error) {
 	// Save state for re-entrant safety
 	savedLocalsLen := len(e.locals)
 	savedNodeID := e.currentNodeID
@@ -199,7 +200,6 @@ func (e *Evaluator) evalLoopWith(startNode *Node, stack []frame, startTail bool)
 	es := &evalState{
 		node:       startNode,
 		evaluating: true,
-		tail:       startTail,
 		stack:      stack,
 	}
 
@@ -264,6 +264,14 @@ func (e *Evaluator) evalStep(es *evalState) {
 			es.result = val
 			es.evaluating = false
 			return
+		case NodeBuiltin:
+			if fn, ok := e.Builtins[es.node.Str]; ok {
+				es.result = BuiltinVal(es.node.Str, fn)
+				es.evaluating = false
+				return
+			}
+			es.err = fmt.Errorf("unknown builtin: %s", es.node.Str)
+			return
 		case NodeRef:
 			// Push frameRef, then evaluate the referenced node's expression
 			if e.ResolveNode == nil {
@@ -282,7 +290,6 @@ func (e *Evaluator) evalStep(es *evalState) {
 			})
 			e.currentNodeID = es.node.Ref
 			es.node = expr
-			es.tail = false
 			return
 		case NodeList:
 			if len(es.node.Children) == 0 {
@@ -302,12 +309,10 @@ func (e *Evaluator) evalStep(es *evalState) {
 					}
 					es.stack = append(es.stack, frame{
 						kind:     frameIfCond,
-						tail:     es.tail,
 						thenNode: es.node.Children[2],
 						elseNode: es.node.Children[3],
 					})
 					es.node = es.node.Children[1]
-					es.tail = false
 					return
 
 				case "let":
@@ -327,9 +332,7 @@ func (e *Evaluator) evalStep(es *evalState) {
 					bindings := make(map[string]Value, len(bindingsNode.Children)/2)
 					e.pushScope(bindings)
 					if len(bindingsNode.Children) == 0 {
-						if !es.tail {
-							es.stack = append(es.stack, frame{kind: frameScopeCleanup})
-						}
+						es.stack = append(es.stack, frame{kind: frameScopeCleanup})
 						es.node = es.node.Children[2]
 						return
 					}
@@ -339,7 +342,6 @@ func (e *Evaluator) evalStep(es *evalState) {
 					}
 					es.stack = append(es.stack, frame{
 						kind:      frameLetBind,
-						tail:      es.tail,
 						bindings:  bindings,
 						bindPairs: bindingsNode.Children,
 						bindIdx:   0,
@@ -347,53 +349,6 @@ func (e *Evaluator) evalStep(es *evalState) {
 						scopeIdx:  len(e.locals) - 1,
 					})
 					es.node = bindingsNode.Children[1]
-					es.tail = false
-					return
-
-				case "letrec":
-					if len(es.node.Children) != 3 {
-						es.err = fmt.Errorf("letrec: expected bindings and body")
-						return
-					}
-					bindingsNode := es.node.Children[1]
-					if bindingsNode.Kind != NodeList {
-						es.err = fmt.Errorf("letrec: bindings must be a list")
-						return
-					}
-					if len(bindingsNode.Children)%2 != 0 {
-						es.err = fmt.Errorf("letrec: bindings must have an even number of forms")
-						return
-					}
-					numBindings := len(bindingsNode.Children) / 2
-					names := make([]string, numBindings)
-					for i := 0; i < len(bindingsNode.Children); i += 2 {
-						if bindingsNode.Children[i].Kind != NodeSymbol {
-							es.err = fmt.Errorf("letrec: binding name must be a symbol")
-							return
-						}
-						names[i/2] = bindingsNode.Children[i].Str
-					}
-					scope := make(map[string]Value, numBindings)
-					e.pushScope(scope)
-					if len(bindingsNode.Children) == 0 {
-						if !es.tail {
-							es.stack = append(es.stack, frame{kind: frameScopeCleanup})
-						}
-						es.node = es.node.Children[2]
-						return
-					}
-					es.stack = append(es.stack, frame{
-						kind:      frameLetrecBind,
-						tail:      es.tail,
-						bindings:  scope,
-						bindPairs: bindingsNode.Children,
-						bindNames: names,
-						bindIdx:   0,
-						bodyNode:  es.node.Children[2],
-						scopeIdx:  len(e.locals) - 1,
-					})
-					es.node = bindingsNode.Children[1]
-					es.tail = false
 					return
 
 				case "do":
@@ -408,12 +363,10 @@ func (e *Evaluator) evalStep(es *evalState) {
 					}
 					es.stack = append(es.stack, frame{
 						kind:    frameDo,
-						tail:    es.tail,
 						doExprs: exprs,
 						doIdx:   0,
 					})
 					es.node = exprs[0]
-					es.tail = false
 					return
 
 				case "fn":
@@ -453,11 +406,9 @@ func (e *Evaluator) evalStep(es *evalState) {
 					}
 					es.stack = append(es.stack, frame{
 						kind:          frameApplyFn,
-						tail:          es.tail,
 						applyListNode: es.node.Children[2],
 					})
 					es.node = es.node.Children[1]
-					es.tail = false
 					return
 
 				case "sort-by":
@@ -469,10 +420,123 @@ func (e *Evaluator) evalStep(es *evalState) {
 					es.result = val
 					es.evaluating = false
 					return
+
+				case "loop":
+					if len(es.node.Children) != 3 {
+						es.err = fmt.Errorf("loop: expected bindings and body")
+						return
+					}
+					bindingsNode := es.node.Children[1]
+					if bindingsNode.Kind != NodeList {
+						es.err = fmt.Errorf("loop: bindings must be a list of pairs")
+						return
+					}
+					numBindings := len(bindingsNode.Children)
+					names := make([]string, numBindings)
+					for i, pair := range bindingsNode.Children {
+						if pair.Kind != NodeList || len(pair.Children) != 2 {
+							es.err = fmt.Errorf("loop: each binding must be a (name value) pair")
+							return
+						}
+						if pair.Children[0].Kind != NodeSymbol {
+							es.err = fmt.Errorf("loop: binding name must be a symbol")
+							return
+						}
+						names[i] = pair.Children[0].Str
+					}
+					bindings := make(map[string]Value, numBindings)
+					e.pushScope(bindings)
+					if numBindings == 0 {
+						// No bindings — push frameLoop and go straight to body
+						es.stack = append(es.stack, frame{
+							kind:         frameLoop,
+							loopNames:    names,
+							loopBody:     es.node.Children[2],
+							loopScopeIdx: len(e.locals) - 1,
+						})
+						es.node = es.node.Children[2]
+						return
+					}
+					es.stack = append(es.stack, frame{
+						kind:         frameLoopBind,
+						bindings:     bindings,
+						loopNames:    names,
+						loopBody:     es.node.Children[2],
+						loopScopeIdx: len(e.locals) - 1,
+						bindIdx:      0,
+						bindPairs:    bindingsNode.Children,
+					})
+					// Start evaluating first binding's init value
+					es.node = bindingsNode.Children[0].Children[1]
+					return
+
+				case "recur":
+					// Find nearest frameLoop on stack
+					loopIdx := -1
+					for i := len(es.stack) - 1; i >= 0; i-- {
+						if es.stack[i].kind == frameLoop {
+							loopIdx = i
+							break
+						}
+					}
+					if loopIdx < 0 {
+						es.err = fmt.Errorf("recur: not inside a loop")
+						return
+					}
+					loopFrame := &es.stack[loopIdx]
+					argNodes := es.node.Children[1:]
+					if len(argNodes) != len(loopFrame.loopNames) {
+						es.err = fmt.Errorf("recur: expected %d args, got %d", len(loopFrame.loopNames), len(argNodes))
+						return
+					}
+					if len(argNodes) == 0 {
+						// No args — pop everything above loop frame, restart body
+						es.stack = es.stack[:loopIdx+1]
+						e.locals = e.locals[:loopFrame.loopScopeIdx+1]
+						es.node = loopFrame.loopBody
+						return
+					}
+					es.stack = append(es.stack, frame{
+						kind:      frameRecurArg,
+						recurArgs: argNodes,
+						recurDone: make([]Value, 0, len(argNodes)),
+						recurIdx:  0,
+					})
+					es.node = argNodes[0]
+					return
 				}
 			}
 
-			// Builtins (symbol head, not a core form)
+			// NodeBuiltin head — resolved at define time
+			if head.Kind == NodeBuiltin {
+				if fn, ok := e.Builtins[head.Str]; ok {
+					argNodes := es.node.Children[1:]
+					if len(argNodes) == 0 {
+						val, err := fn(nil)
+						if err != nil {
+							es.err = err
+							return
+						}
+						es.result = val
+						es.evaluating = false
+						return
+					}
+					es.stack = append(es.stack, frame{
+						kind:        frameBuiltinArg,
+						builtin:     fn,
+						builtinName: head.Str,
+						builtinDone: make([]Value, 0, len(argNodes)),
+						builtinArgs: argNodes,
+						builtinIdx:  0,
+					})
+					es.node = argNodes[0]
+					return
+				}
+				es.err = fmt.Errorf("unknown builtin: %s", head.Str)
+				return
+			}
+
+			// Builtins (symbol head, not a core form) — legacy dynamic path
 			if head.Kind == NodeSymbol && e.Builtins != nil {
 				if fn, ok := e.Builtins[head.Str]; ok {
 					argNodes := es.node.Children[1:]
@@ -495,7 +559,6 @@ func (e *Evaluator) evalStep(es *evalState) {
 						builtinIdx:  0,
 					})
 					es.node = argNodes[0]
-					es.tail = false
 					return
 				}
 			}
@@ -503,12 +566,10 @@ func (e *Evaluator) evalStep(es *evalState) {
 			// Computed head — evaluate it, then dispatch
 			es.stack = append(es.stack, frame{
 				kind:     frameEvalHead,
-				tail:     es.tail,
 				headNode: head,
 				argNodes: es.node.Children[1:],
 			})
 			es.node = head
-			es.tail = false
 			return
 
 		default:
@@ -545,7 +606,6 @@ func (e *Evaluator) evalStep(es *evalState) {
 	case frameEvalHead:
 		headNode := f.headNode
 		argNodes := f.argNodes
-		frameTail := f.tail
 		es.stack = es.stack[:len(es.stack)-1]
 
 		if es.result.Kind == ValFn {
@@ -562,33 +622,29 @@ func (e *Evaluator) evalStep(es *evalState) {
 				}
 			}
 			if len(argNodes) == 0 {
-				es.node = e.enterFnBody(fn, nil, frameTail, &es.stack)
-				es.tail = true
+				es.node = e.enterFnBody(fn, nil, &es.stack)
 				es.evaluating = true
 				return
 			}
 			es.stack = append(es.stack, frame{
 				kind:   frameFnArg,
-				tail:   frameTail,
 				fn:     fn,
 				fnDone: make([]Value, 0, len(argNodes)),
 				fnArgs: argNodes,
 				fnIdx:  0,
 			})
 			es.node = argNodes[0]
-			es.tail = false
 			es.evaluating = true
 			return
 		}
 		if es.result.Kind == ValForm {
 			formFn := es.result.Fn
-			n, err := e.handleFormCall(formFn, argNodes, frameTail, &es.stack)
+			n, err := e.handleFormCall(formFn, argNodes, &es.stack)
 			if err != nil {
 				es.err = err
 				return
 			}
 			es.node = n
-			es.tail = frameTail
 			es.evaluating = true
 			return
 		}
@@ -613,7 +669,6 @@ func (e *Evaluator) evalStep(es *evalState) {
 				builtinIdx:  0,
 			})
 			es.node = argNodes[0]
-			es.tail = false
 			es.evaluating = true
 			return
 		}
@@ -647,30 +702,25 @@ func (e *Evaluator) evalStep(es *evalState) {
 		f.fnIdx++
 		if f.fnIdx < len(f.fnArgs) {
 			es.node = f.fnArgs[f.fnIdx]
-			es.tail = false
 			es.evaluating = true
 			return
 		}
 		fn := f.fn
 		args := f.fnDone
-		frameTail := f.tail
 		es.stack = es.stack[:len(es.stack)-1]
-		es.node = e.enterFnBody(fn, args, frameTail, &es.stack)
-		es.tail = true
+		es.node = e.enterFnBody(fn, args, &es.stack)
 		es.evaluating = true
 		return
 
 	case frameIfCond:
 		thenNode := f.thenNode
 		elseNode := f.elseNode
-		frameTail := f.tail
 		es.stack = es.stack[:len(es.stack)-1]
 		if es.result.Truthy() {
 			es.node = thenNode
 		} else {
 			es.node = elseNode
 		}
-		es.tail = frameTail
 		es.evaluating = true
 		return
 
@@ -684,48 +734,13 @@ func (e *Evaluator) evalStep(es *evalState) {
 				return
 			}
 			es.node = f.bindPairs[f.bindIdx+1]
-			es.tail = false
 			es.evaluating = true
 			return
 		}
 		bodyNode := f.bodyNode
-		frameTail := f.tail
 		es.stack = es.stack[:len(es.stack)-1]
-		if !frameTail {
-			es.stack = append(es.stack, frame{kind: frameScopeCleanup})
-		}
+		es.stack = append(es.stack, frame{kind: frameScopeCleanup})
 		es.node = bodyNode
-		es.tail = frameTail
-		es.evaluating = true
-		return
-
-	case frameLetrecBind:
-		f.bindings[f.bindNames[f.bindIdx/2]] = es.result
-		f.bindIdx += 2
-		if f.bindIdx < len(f.bindPairs) {
-			es.node = f.bindPairs[f.bindIdx+1]
-			es.tail = false
-			es.evaluating = true
-			return
-		}
-		for _, val := range f.bindings {
-			if (val.Kind == ValFn || val.Kind == ValForm) && val.Fn != nil {
-				if val.Fn.Closure == nil {
-					val.Fn.Closure = make(map[string]Value, len(f.bindNames))
-				}
-				for _, name := range f.bindNames {
-					val.Fn.Closure[name] = f.bindings[name]
-				}
-			}
-		}
-		bodyNode := f.bodyNode
-		frameTail := f.tail
-		es.stack = es.stack[:len(es.stack)-1]
-		if !frameTail {
-			es.stack = append(es.stack, frame{kind: frameScopeCleanup})
-		}
-		es.node = bodyNode
-		es.tail = frameTail
 		es.evaluating = true
 		return
 
@@ -733,14 +748,11 @@ func (e *Evaluator) evalStep(es *evalState) {
 		f.doIdx++
 		if f.doIdx < len(f.doExprs)-1 {
 			es.node = f.doExprs[f.doIdx]
-			es.tail = false
 			es.evaluating = true
 			return
 		}
 		if f.doIdx == len(f.doExprs)-1 {
-			frameTail := f.tail
 			es.node = f.doExprs[f.doIdx]
-			es.tail = frameTail
 			es.stack = es.stack[:len(es.stack)-1]
 			es.evaluating = true
 			return
@@ -748,7 +760,6 @@ func (e *Evaluator) evalStep(es *evalState) {
 		es.stack = es.stack[:len(es.stack)-1]
 
 	case frameFormExpand:
-		frameTail := f.tail
 		es.stack = es.stack[:len(es.stack)-1]
 		expansionNode, err := valueToNode(es.result)
 		if err != nil {
@@ -756,7 +767,6 @@ func (e *Evaluator) evalStep(es *evalState) {
 			return
 		}
 		es.node = expansionNode
-		es.tail = frameTail
 		es.evaluating = true
 		return
 
@@ -770,24 +780,20 @@ func (e *Evaluator) evalStep(es *evalState) {
 			return
 		}
 		applyListNode := f.applyListNode
-		frameTail := f.tail
 		es.stack = es.stack[:len(es.stack)-1]
 		if es.result.Kind == ValBuiltin {
 			es.stack = append(es.stack, frame{
 				kind:        frameApplyList,
-				tail:        frameTail,
 				builtin:     es.result.BuiltinFunc,
 				builtinName: es.result.BuiltinName,
 			})
 		} else {
 			es.stack = append(es.stack, frame{
 				kind:    frameApplyList,
-				tail:    frameTail,
 				applyFn: es.result.Fn,
 			})
 		}
 		es.node = applyListNode
-		es.tail = false
 		es.evaluating = true
 		return
 
@@ -797,7 +803,6 @@ func (e *Evaluator) evalStep(es *evalState) {
 			return
 		}
 		args := *es.result.List
-		frameTail := f.tail
 		es.stack = es.stack[:len(es.stack)-1]
 		if f.builtin != nil {
 			// Builtin apply: call directly
@@ -807,7 +812,6 @@ func (e *Evaluator) evalStep(es *evalState) {
 				return
 			}
 			es.result = val
-			_ = frameTail // builtins don't use tail position
 			return
 		}
 		fn := f.applyFn
@@ -822,60 +826,84 @@ func (e *Evaluator) evalStep(es *evalState) {
 				return
 			}
 		}
-		es.node = e.enterFnBody(fn, args, frameTail, &es.stack)
-		es.tail = true
+		es.node = e.enterFnBody(fn, args, &es.stack)
+		es.evaluating = true
+		return
+
+	case frameLoopBind:
+		// Assign binding value
+		f.bindings[f.loopNames[f.bindIdx]] = es.result
+		f.bindIdx++
+		if f.bindIdx < len(f.bindPairs) {
+			// Evaluate next binding's init value
+			es.node = f.bindPairs[f.bindIdx].Children[1]
+			es.evaluating = true
+			return
+		}
+		// All bindings done — push frameLoop, start evaluating body
+		loopNames := f.loopNames
+		loopBody := f.loopBody
+		loopScopeIdx := f.loopScopeIdx
+		es.stack = es.stack[:len(es.stack)-1]
+		es.stack = append(es.stack, frame{
+			kind:         frameLoop,
+			loopNames:    loopNames,
+			loopBody:     loopBody,
+			loopScopeIdx: loopScopeIdx,
+		})
+		es.node = loopBody
+		es.evaluating = true
+		return
+
+	case frameLoop:
+		// Body returned a value (no recur). Pop scope, pop frame, pass value through.
+		e.locals = e.locals[:f.loopScopeIdx]
+		es.stack = es.stack[:len(es.stack)-1]
+
+	case frameRecurArg:
+		f.recurDone = append(f.recurDone, es.result)
+		f.recurIdx++
+		if f.recurIdx < len(f.recurArgs) {
+			es.node = f.recurArgs[f.recurIdx]
+			es.evaluating = true
+			return
+		}
+		// All args evaluated — find nearest frameLoop, update bindings, restart
+		args := f.recurDone
+		es.stack = es.stack[:len(es.stack)-1]
+		loopIdx := -1
+		for i := len(es.stack) - 1; i >= 0; i-- {
+			if es.stack[i].kind == frameLoop {
+				loopIdx = i
+				break
+			}
+		}
+		if loopIdx < 0 {
+			es.err = fmt.Errorf("recur: no enclosing loop")
+			return
+		}
+		loopFrame := &es.stack[loopIdx]
+		// Pop everything above the loop frame
+		es.stack = es.stack[:loopIdx+1]
+		// Reset locals to loop scope
+		e.locals = e.locals[:loopFrame.loopScopeIdx+1]
+		// Update bindings in scope
+		scope := e.locals[loopFrame.loopScopeIdx]
+		for i, name := range loopFrame.loopNames {
+			scope[name] = args[i]
+		}
+		es.node = loopFrame.loopBody
 		es.evaluating = true
 		return
 	}
 }
 
 // enterFnBody sets up scope for a function call and returns the body node to evaluate.
-// If tail=true, it performs TCO by reusing the nearest frameFnBody.
-func (e *Evaluator) enterFnBody(fn *FnValue, args []Value, tail bool, stack *[]frame) *Node {
-	if tail {
-		// TCO: find nearest frameFnBody and reuse it
-		for i := len(*stack) - 1; i >= 0; i-- {
-			if (*stack)[i].kind == frameFnBody {
-				// Reset scope to that frame's scopeBase
-				scopeBase := (*stack)[i].scopeBase
-				savedNodeID := (*stack)[i].savedNodeID
-				e.locals = e.locals[:scopeBase]
-				e.currentNodeID = savedNodeID
-				// Remove that frame and everything above it
-				*stack = (*stack)[:i]
-				// Push new frameFnBody
-				*stack = append(*stack, frame{
-					kind:        frameFnBody,
-					tail:        true,
-					scopeBase:   scopeBase,
-					savedNodeID: savedNodeID,
-				})
-				// Push closure + bindings
-				if fn.Closure != nil {
-					e.pushScope(fn.Closure)
-				}
-				bindings := make(map[string]Value, len(fn.Params)+1)
-				for i, param := range fn.Params {
-					bindings[param] = args[i]
-				}
-				if fn.RestParam != "" {
-					bindings[fn.RestParam] = ListVal(args[len(fn.Params):])
-				}
-				e.pushScope(bindings)
-				if fn.NodeID != "" {
-					e.currentNodeID = fn.NodeID
-				}
-				return fn.Body
-			}
-		}
-	}
-
-	// Non-tail or no frameFnBody found: push a new one
+func (e *Evaluator) enterFnBody(fn *FnValue, args []Value, stack *[]frame) *Node {
 	scopeBase := len(e.locals)
 	prevNodeID := e.currentNodeID
 	*stack = append(*stack, frame{
 		kind:        frameFnBody,
-		tail:        true, // body of fn is always tail
 		scopeBase:   scopeBase,
 		savedNodeID: prevNodeID,
 	})
@@ -898,7 +926,7 @@ func (e *Evaluator) enterFnBody(fn *FnValue, args []Value, tail bool, stack *[]f
 
 // handleFormCall sets up form expansion. The form body is evaluated via CallFnWithValues
 // (which is re-entrant), then the expansion is converted to AST and evaluated.
-func (e *Evaluator) handleFormCall(formFn *FnValue, argNodes []*Node, tail bool, stack *[]frame) (*Node, error) {
+func (e *Evaluator) handleFormCall(formFn *FnValue, argNodes []*Node, stack *[]frame) (*Node, error) {
 	if formFn.RestParam != "" {
 		if len(argNodes) < len(formFn.Params) {
 			return nil, fmt.Errorf("form: expected at least %d args, got %d", len(formFn.Params), len(argNodes))
@@ -932,11 +960,6 @@ func (e *Evaluator) handleFormCall(formFn *FnValue, argNodes []*Node, tail bool,
 func (e *Evaluator) resolveSymbol(name string) (Value, error) {
 	if val, ok := e.lookupLocal(name); ok {
 		return val, nil
-	}
-	if e.Resolve != nil {
-		if val, ok := e.Resolve(name); ok {
-			return val, nil
-		}
 	}
 	if e.Builtins != nil {
 		if fn, ok := e.Builtins[name]; ok {
@@ -1127,6 +1150,8 @@ func nodeToValue(n *Node) Value {
 		return NodeRefVal(n.Ref)
 	case NodeNil:
 		return NilVal()
+	case NodeBuiltin:
+		return SymbolVal(n.Str)
 	case NodeList:
 		elems := make([]Value, len(n.Children))
 		for i, c := range n.Children {
@@ -1233,6 +1258,9 @@ func DataBuiltins() map[string]Builtin {
 		// JSON
 		"to-json":   builtinToJSON,
 		"from-json": builtinFromJSON,
+		// Link
+		"link":        builtinLink,
+		"link-target": builtinLinkTarget,
 	}
 }
 
@@ -1395,6 +1423,8 @@ func builtinType(args []Value) (Value, error) {
 		return KeywordVal("node-ref"), nil
 	case ValBuiltin:
 		return KeywordVal("builtin"), nil
+	case ValLink:
+		return KeywordVal("link"), nil
 	default:
 		return KeywordVal("unknown"), nil
 	}
@@ -1523,6 +1553,8 @@ func typeRank(k ValueKind) int {
 		return 11
 	case ValBuiltin:
 		return 12
+	case ValLink:
+		return 13
 	default:
 		return 99
 	}
@@ -1802,4 +1834,26 @@ func builtinFromJSON(args []Value) (Value, error) {
 		return Value{}, fmt.Errorf("from-json: %s", err)
 	}
 	return GoToValue(goVal), nil
+}
+
+// --- Link ---
+
+func builtinLink(args []Value) (Value, error) {
+	if len(args) != 1 {
+		return Value{}, fmt.Errorf("link: expected 1 arg (symbol), got %d", len(args))
+	}
+	if args[0].Kind != ValSymbol {
+		return Value{}, fmt.Errorf("link: expected Symbol, got %s", args[0].KindName())
+	}
+	return LinkVal(args[0].Str), nil
+}
+
+func builtinLinkTarget(args []Value) (Value, error) {
+	if len(args) != 1 {
+		return Value{}, fmt.Errorf("link-target: expected 1 arg (link), got %d", len(args))
+	}
+	if args[0].Kind != ValLink {
+		return Value{}, fmt.Errorf("link-target: expected Link, got %s", args[0].KindName())
+	}
+	return SymbolVal(args[0].Str), nil
 }

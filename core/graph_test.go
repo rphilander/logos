@@ -24,17 +24,13 @@ const hofLibrary = `(define nil? (fn (x) (eq (type x) :nil)))
 
 (define empty? (fn (xs) (eq (len xs) 0)))
 
-(define fold (fn (f acc xs) (if (empty? xs) acc (fold f (f acc (head xs)) (rest xs)))))
+(define fold (fn (f acc xs) (loop ((acc acc) (xs xs)) (if (empty? xs) acc (recur (f acc (head xs)) (rest xs))))))
 
 (define reverse (fn (xs) (fold (fn (acc x) (cons x acc)) (list) xs)))
 
-(define map-acc (fn (f acc xs) (if (empty? xs) (reverse acc) (map-acc f (cons (f (head xs)) acc) (rest xs)))))
+(define map (fn (f xs) (loop ((acc (list)) (xs xs)) (if (empty? xs) (reverse acc) (recur (cons (f (head xs)) acc) (rest xs))))))
 
-(define map (fn (f xs) (map-acc f (list) xs)))
-
-(define filter-acc (fn (f acc xs) (if (empty? xs) (reverse acc) (if (f (head xs)) (filter-acc f (cons (head xs) acc) (rest xs)) (filter-acc f acc (rest xs))))))
-
-(define filter (fn (f xs) (filter-acc f (list) xs)))
+(define filter (fn (f xs) (loop ((acc (list)) (xs xs)) (if (empty? xs) (reverse acc) (if (f (head xs)) (recur (cons (head xs) acc) (rest xs)) (recur acc (rest xs)))))))
 
 (define group-by (fn (f xs) (fold (fn (acc x) (let (k (to-string (f x)) existing (get acc k)) (put acc k (if (nil? existing) (list x) (append existing (list x)))))) (dict) xs)))
 `
@@ -45,7 +41,7 @@ const formLibrary = `(define not (fn (x) (if x false true)))
 
 (define empty? (fn (xs) (eq (len xs) 0)))
 
-(define fold (fn (f acc xs) (if (empty? xs) acc (fold f (f acc (head xs)) (rest xs)))))
+(define fold (fn (f acc xs) (loop ((acc acc) (xs xs)) (if (empty? xs) acc (recur (f acc (head xs)) (rest xs))))))
 
 (define reverse (fn (xs) (fold (fn (acc x) (cons x acc)) (list) xs)))
 
@@ -53,9 +49,9 @@ const formLibrary = `(define not (fn (x) (if x false true)))
 
 (define or (form (a b) (list (quote let) (list (quote __or-val__) a) (list (quote if) (quote __or-val__) (quote __or-val__) b))))
 
-(define cond (form (& pairs) (letrec (expand (fn (ps) (if (empty? ps) (quote nil) (list (quote if) (head ps) (nth ps 1) (expand (rest (rest ps))))))) (expand pairs))))
+(define cond (form (& pairs) (let (rev (reverse pairs) expanded (loop ((ps rev) (result (quote nil))) (if (empty? ps) result (recur (rest (rest ps)) (list (quote if) (nth ps 1) (head ps) result))))) expanded)))
 
-(define case (form (target & clauses) (letrec (expand (fn (cs) (if (empty? cs) (quote nil) (if (eq (len cs) 1) (head cs) (list (quote if) (list (quote eq) (quote __case-target__) (head cs)) (nth cs 1) (expand (rest (rest cs)))))))) (list (quote let) (list (quote __case-target__) target) (expand clauses)))))
+(define case (form (target & clauses) (let (rev (reverse clauses) has-default (eq (mod (len clauses) 2) 1) start-result (if has-default (head rev) (quote nil)) start-cs (if has-default (rest rev) rev) expanded (loop ((cs start-cs) (result start-result)) (if (empty? cs) result (recur (rest (rest cs)) (list (quote if) (list (quote eq) (quote __case-target__) (nth cs 1)) (head cs) result))))) (list (quote let) (list (quote __case-target__) target) expanded))))
 
 (define when (form (test body) (list (quote if) test body nil)))
 
@@ -1150,113 +1146,6 @@ func TestGraphAssertFailInDefinedFn(t *testing.T) {
 	}
 }
 
-// --- TCO / Recursion tests ---
-
-func TestRecursionFactorial(t *testing.T) {
-	g := testGraph(t)
-	g.Define("factorial", `(fn (n) (if (lt n 2) 1 (mul n (factorial (sub n 1)))))`)
-	val, err := g.Eval(`(factorial 10)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ValuesEqual(val, IntVal(3628800)) {
-		t.Fatalf("expected 3628800, got %s", val.String())
-	}
-}
-
-func TestTailRecursionDeep(t *testing.T) {
-	g := testGraph(t)
-	g.Define("count-down", `(fn (n) (if (lt n 1) 0 (count-down (sub n 1))))`)
-	// Without TCO, 100000 would stack overflow
-	val, err := g.Eval(`(count-down 100000)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ValuesEqual(val, IntVal(0)) {
-		t.Fatalf("expected 0, got %s", val.String())
-	}
-}
-
-func TestTailRecursiveAccumulator(t *testing.T) {
-	g := testGraph(t)
-	g.Define("my-sum", `(fn (acc xs) (if (eq (len xs) 0) acc (my-sum (add acc (head xs)) (rest xs))))`)
-	val, err := g.Eval(`(my-sum 0 (list 1 2 3 4 5))`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ValuesEqual(val, IntVal(15)) {
-		t.Fatalf("expected 15, got %s", val.String())
-	}
-}
-
-func TestTailPositionLet(t *testing.T) {
-	g := testGraph(t)
-	g.Define("loop", `(fn (n) (let (m (sub n 1)) (if (lt m 1) 0 (loop m))))`)
-	val, err := g.Eval(`(loop 100000)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ValuesEqual(val, IntVal(0)) {
-		t.Fatalf("expected 0, got %s", val.String())
-	}
-}
-
-func TestTailPositionDo(t *testing.T) {
-	g := testGraph(t)
-	g.Define("loop-do", `(fn (n) (do nil (if (lt n 1) 0 (loop-do (sub n 1)))))`)
-	val, err := g.Eval(`(loop-do 100000)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ValuesEqual(val, IntVal(0)) {
-		t.Fatalf("expected 0, got %s", val.String())
-	}
-}
-
-func TestTailPositionCond(t *testing.T) {
-	g := testGraphWithFormLibrary(t)
-	g.Define("loop-cond", `(fn (n) (cond (lt n 1) 0 true (loop-cond (sub n 1))))`)
-	val, err := g.Eval(`(loop-cond 100000)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ValuesEqual(val, IntVal(0)) {
-		t.Fatalf("expected 0, got %s", val.String())
-	}
-}
-
-func TestTailPositionCase(t *testing.T) {
-	g := testGraphWithFormLibrary(t)
-	g.Define("loop-case", `(fn (n) (case (lt n 1) true 0 false (loop-case (sub n 1))))`)
-	val, err := g.Eval(`(loop-case 100000)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ValuesEqual(val, IntVal(0)) {
-		t.Fatalf("expected 0, got %s", val.String())
-	}
-}
-
-func TestMutualRecursion(t *testing.T) {
-	g := testGraph(t)
-	g.Define("my-even", `(fn (n) (if (lt n 1) true (my-odd (sub n 1))))`)
-	g.Define("my-odd", `(fn (n) (if (lt n 1) false (my-even (sub n 1))))`)
-	val, err := g.Eval(`(my-even 100000)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ValuesEqual(val, BoolVal(true)) {
-		t.Fatalf("expected true, got %s", val.String())
-	}
-	val, err = g.Eval(`(my-odd 99999)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ValuesEqual(val, BoolVal(true)) {
-		t.Fatalf("expected true, got %s", val.String())
-	}
-}
-
 // --- Library higher-order function tests ---
 
 func TestLibraryMap(t *testing.T) {
@@ -1335,9 +1224,8 @@ func TestLibraryGroupBy(t *testing.T) {
 
 func TestLibraryHOFLargeList(t *testing.T) {
 	g := testGraphWithLibrary(t)
-	// Build a large list via tail-recursive range
-	g.Define("range-acc", `(fn (n acc) (if (lt n 1) acc (range-acc (sub n 1) (cons n acc))))`)
-	g.Define("my-range", `(fn (n) (range-acc n (list)))`)
+	// Build a large list via loop/recur
+	g.Define("my-range", `(fn (n) (loop ((n n) (acc (list))) (if (lt n 1) acc (recur (sub n 1) (cons n acc)))))`)
 	// fold over 10000 elements: sum 1..10000 = 50005000
 	val, err := g.Eval(`(fold (fn (acc x) (add acc x)) 0 (my-range 10000))`)
 	if err != nil {
@@ -1436,11 +1324,10 @@ func TestGraphFormLogReplay(t *testing.T) {
 	}
 }
 
-func TestGraphFormWithFnDependency(t *testing.T) {
+func TestGraphFormWithBuiltinInExpansion(t *testing.T) {
 	g := testGraph(t)
-	// Define a helper function, then a form that uses it
-	g.Define("double", `(fn (x) (mul x 2))`)
-	g.Define("double-when", `(form (test body) (list (quote if) test (list (quote double) body) nil))`)
+	// Form that uses a builtin in its expansion
+	g.Define("double-when", `(form (test body) (list (quote if) test (list (quote mul) body 2) nil))`)
 	val, err := g.Eval(`(double-when true 5)`)
 	if err != nil {
 		t.Fatal(err)

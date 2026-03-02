@@ -1,6 +1,6 @@
 (define route (fn (method path handler) (dict "method" method "path" path "handler" handler)))
 
-(define match-route (fn (req routes) (letrec (go (fn (rs) (if (empty? rs) nil (let (r (head rs)) (if (and (eq (get r "method") (get req "method")) (eq (get r "path") (get req "path"))) r (go (rest rs))))))) (go routes))))
+(define match-route (fn (req routes) (loop ((rs routes)) (if (empty? rs) nil (let (r (head rs)) (if (and (eq (get r "method") (get req "method")) (eq (get r "path") (get req "path"))) r (recur (rest rs))))))))
 
 (define dispatch (fn (req routes) (let (matched (match-route req routes)) (if (nil? matched) (dict "status" 404 "headers" (dict "Content-Type" "text/plain") "body" "Not Found") ((get matched "handler") req)))))
 
@@ -49,4 +49,3 @@
 (define v-row (fn (cols) (concat "<v-row>" (fold concat "" cols) "</v-row>")))
 
 (define v-col (fn (width body) (concat "<v-col cols=\"" (to-string width) "\">" body "</v-col>")))
-

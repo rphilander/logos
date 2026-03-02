@@ -59,48 +59,6 @@ func TestEvalLetSequential(t *testing.T) {
 	testEval(t, `(let (x 1 y x) y)`, IntVal(1))
 }
 
-// --- Letrec ---
-
-func TestEvalLetrecSelfRecursion(t *testing.T) {
-	// Countdown to 0
-	testEval(t, `(letrec (f (fn (n) (if (eq n 0) 0 (f (sub n 1))))) (f 5))`, IntVal(0))
-}
-
-func TestEvalLetrecMutualRecursion(t *testing.T) {
-	testEval(t, `(letrec (even? (fn (n) (if (eq n 0) true (odd? (sub n 1))))
-	                      odd?  (fn (n) (if (eq n 0) false (even? (sub n 1)))))
-	               (list (even? 4) (odd? 3)))`,
-		ListVal([]Value{BoolVal(true), BoolVal(true)}))
-}
-
-func TestEvalLetrecNonFunction(t *testing.T) {
-	testEval(t, `(letrec (x 42) x)`, IntVal(42))
-}
-
-func TestEvalLetrecMixed(t *testing.T) {
-	// fn references a non-fn binding from same letrec
-	testEval(t, `(letrec (base 10 f (fn (n) (add n base))) (f 5))`, IntVal(15))
-}
-
-func TestEvalLetrecSequential(t *testing.T) {
-	// Later bindings see earlier ones during evaluation
-	testEval(t, `(letrec (x 1 y x) y)`, IntVal(1))
-}
-
-func TestEvalLetrecNested(t *testing.T) {
-	testEval(t, `(letrec (f (fn (n) (if (eq n 0) 0
-	               (letrec (g (fn (m) (f (sub m 1)))) (g n)))))
-	             (f 3))`, IntVal(0))
-}
-
-func TestEvalLetrecErrors(t *testing.T) {
-	testEvalError(t, `(letrec)`)
-	testEvalError(t, `(letrec (x 1))`)               // missing body
-	testEvalError(t, `(letrec "bad" x)`)             // bindings not a list
-	testEvalError(t, `(letrec (1 2) x)`)             // name not a symbol
-	testEvalError(t, `(letrec (x) x)`)               // odd number of bindings
-}
-
 // --- Fuel ---
 
 func testEvalFuel(t *testing.T, input string, fuel int, expected Value) {
@@ -125,8 +83,8 @@ func testEvalFuelError(t *testing.T, input string, fuel int) {
 }
 
 func TestFuelExhaustion(t *testing.T) {
-	// Infinite recursion caught by fuel
-	testEvalFuelError(t, `(letrec (f (fn () (f))) (f))`, 100)
+	// Infinite loop caught by fuel
+	testEvalFuelError(t, `(loop ((x 0)) (recur (add x 1)))`, 100)
 }
 
 func TestFuelSufficient(t *testing.T) {
@@ -177,22 +135,8 @@ func TestRestParamsFnArity(t *testing.T) {
 }
 
 func TestRestParamsForm(t *testing.T) {
-	ev := &Evaluator{Builtins: DataBuiltins()}
-	ev.Resolve = func(name string) (Value, bool) {
-		if name == "my-list" {
-			val, _ := ev.EvalString(`(form (& items) (cons (quote list) items))`)
-			return val, true
-		}
-		return Value{}, false
-	}
-	val, err := ev.EvalString(`(my-list 1 2 3)`)
-	if err != nil {
-		t.Fatalf("my-list: %v", err)
-	}
-	expected := ListVal([]Value{IntVal(1), IntVal(2), IntVal(3)})
-	if !ValuesEqual(val, expected) {
-		t.Fatalf("expected %s, got %s", expected.String(), val.String())
-	}
+	testEval(t, `(let (my-list (form (& items) (cons (quote list) items))) (my-list 1 2 3))`,
+		ListVal([]Value{IntVal(1), IntVal(2), IntVal(3)}))
 }
 
 func TestRestParamsString(t *testing.T) {
@@ -552,64 +496,17 @@ func TestFormCreatesFormType(t *testing.T) {
 
 func TestFormWhenMacro(t *testing.T) {
 	// when: (when test body) → (if test body nil)
-	ev := &Evaluator{Builtins: DataBuiltins()}
-	// Define when as a form
-	ev.Resolve = func(name string) (Value, bool) {
-		if name == "when" {
-			val, _ := ev.EvalString(`(form (test body) (list (quote if) test body nil))`)
-			return val, true
-		}
-		return Value{}, false
-	}
-	val, err := ev.EvalString(`(when true 42)`)
-	if err != nil {
-		t.Fatalf("when true: %v", err)
-	}
-	if !ValuesEqual(val, IntVal(42)) {
-		t.Fatalf("when true: expected 42, got %s", val.String())
-	}
-	val, err = ev.EvalString(`(when false 42)`)
-	if err != nil {
-		t.Fatalf("when false: %v", err)
-	}
-	if !ValuesEqual(val, NilVal()) {
-		t.Fatalf("when false: expected nil, got %s", val.String())
-	}
+	testEval(t, `(let (when (form (test body) (list (quote if) test body nil))) (when true 42))`, IntVal(42))
+	testEval(t, `(let (when (form (test body) (list (quote if) test body nil))) (when false 42))`, NilVal())
 }
 
 func TestFormArgsNotEvaluated(t *testing.T) {
 	// The form should receive AST data, not evaluated values
-	// (form (x) x) applied to a symbol should return the symbol as a value
-	ev := &Evaluator{Builtins: DataBuiltins()}
-	ev.Resolve = func(name string) (Value, bool) {
-		if name == "my-quote" {
-			val, _ := ev.EvalString(`(form (x) (list (quote quote) x))`)
-			return val, true
-		}
-		return Value{}, false
-	}
-	val, err := ev.EvalString(`(my-quote hello)`)
-	if err != nil {
-		t.Fatalf("my-quote: %v", err)
-	}
-	if !ValuesEqual(val, SymbolVal("hello")) {
-		t.Fatalf("my-quote: expected symbol hello, got %s", val.String())
-	}
+	testEval(t, `(let (my-quote (form (x) (list (quote quote) x))) (my-quote hello))`, SymbolVal("hello"))
 }
 
 func TestFormArityError(t *testing.T) {
-	ev := &Evaluator{Builtins: DataBuiltins()}
-	ev.Resolve = func(name string) (Value, bool) {
-		if name == "my-form" {
-			val, _ := ev.EvalString(`(form (a b) a)`)
-			return val, true
-		}
-		return Value{}, false
-	}
-	_, err := ev.EvalString(`(my-form 1)`)
-	if err == nil {
-		t.Fatal("expected arity error")
-	}
+	testEvalError(t, `(let (my-form (form (a b) a)) (my-form 1))`)
 }
 
 func TestFormSyntaxErrors(t *testing.T) {
@@ -629,23 +526,13 @@ func TestFormSortByRejects(t *testing.T) {
 
 func TestFormFuelCatchesInfiniteExpansion(t *testing.T) {
 	// A form that expands to calling itself — infinite macro expansion
-	ev := &Evaluator{Builtins: DataBuiltins(), Fuel: 50, FuelSet: true}
-	ev.Resolve = func(name string) (Value, bool) {
-		if name == "loop-form" {
-			val, _ := ev.EvalString(`(form () (list (quote loop-form)))`)
-			return val, true
-		}
-		return Value{}, false
-	}
-	_, err := ev.EvalString(`(loop-form)`)
-	if err == nil {
-		t.Fatal("expected fuel exhaustion error")
-	}
+	// Use let to bind loop-form, then call it — fuel should catch infinite expansion
+	testEvalFuelError(t, `(let (loop-form (form () (list (quote loop-form)))) (loop-form))`, 50)
 }
 
-func TestFormInLetrecBackpatch(t *testing.T) {
-	// Forms should be back-patched in letrec just like fns
-	testEval(t, `(letrec (my-when (form (test body) (list (quote if) test body nil)))
+func TestFormInLet(t *testing.T) {
+	// Forms work in let bindings
+	testEval(t, `(let (my-when (form (test body) (list (quote if) test body nil)))
 		(my-when true 42))`, IntVal(42))
 }
 
@@ -810,4 +697,132 @@ func TestToJSONError(t *testing.T) {
 func TestFromJSONError(t *testing.T) {
 	// invalid JSON
 	testEvalError(t, `(from-json "not json")`)
+}
+
+// --- Loop/Recur ---
+
+func TestLoopBasic(t *testing.T) {
+	// Counter to 5
+	testEval(t, `(loop ((x 0)) (if (eq x 5) x (recur (add x 1))))`, IntVal(5))
+}
+
+func TestLoopMultipleBindings(t *testing.T) {
+	// Accumulator pattern: sum 1..5
+	testEval(t, `(loop ((i 1) (acc 0)) (if (gt i 5) acc (recur (add i 1) (add acc i))))`, IntVal(15))
+}
+
+func TestLoopNested(t *testing.T) {
+	// Outer loop counts to 3, inner loop counts to 2
+	testEval(t, `(loop ((i 0) (total 0))
+		(if (eq i 3) total
+			(let (inner (loop ((j 0) (sum 0))
+				(if (eq j 2) sum (recur (add j 1) (add sum 1)))))
+				(recur (add i 1) (add total inner)))))`, IntVal(6))
+}
+
+func TestLoopNoRecur(t *testing.T) {
+	// Body returns immediately without recur
+	testEval(t, `(loop ((x 42)) x)`, IntVal(42))
+}
+
+func TestRecurOutsideLoop(t *testing.T) {
+	testEvalError(t, `(recur 1)`)
+}
+
+func TestRecurWrongArity(t *testing.T) {
+	testEvalError(t, `(loop ((x 0)) (recur 1 2))`)
+}
+
+func TestLoopNoBindings(t *testing.T) {
+	// Loop with no bindings, body returns directly
+	testEval(t, `(loop () 42)`, IntVal(42))
+}
+
+func TestLoopSyntaxErrors(t *testing.T) {
+	testEvalError(t, `(loop)`)                        // missing bindings and body
+	testEvalError(t, `(loop ())`)                     // missing body
+	testEvalError(t, `(loop "bad" 1)`)               // bindings not a list
+	testEvalError(t, `(loop ((1 2)) 1)`)              // name not a symbol
+	testEvalError(t, `(loop ((x)) 1)`)                // pair has only one element
+}
+
+// --- NodeBuiltin ---
+
+func TestNodeBuiltinResolve(t *testing.T) {
+	g := testGraph(t)
+	node, err := g.Define("inc", `(fn (x) (add x 1))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The stored AST should have `add` resolved to NodeBuiltin
+	body := node.Expr.Children[2] // (add x 1)
+	if body.Kind != NodeList {
+		t.Fatalf("expected body to be list, got %d", body.Kind)
+	}
+	if body.Children[0].Kind != NodeBuiltin {
+		t.Fatalf("expected head to be NodeBuiltin, got %d", body.Children[0].Kind)
+	}
+	if body.Children[0].Str != "add" {
+		t.Fatalf("expected builtin name 'add', got %q", body.Children[0].Str)
+	}
+	// Verify it still works
+	val, err := g.Eval(`(inc 5)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(6)) {
+		t.Fatalf("expected 6, got %s", val.String())
+	}
+}
+
+func TestNodeBuiltinNonHead(t *testing.T) {
+	// Builtin in non-head position (bound to a local)
+	g := testGraph(t)
+	g.Define("apply-add", `(let (f add) (f 1 2))`)
+	val, err := g.Eval(`apply-add`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(3)) {
+		t.Fatalf("expected 3, got %s", val.String())
+	}
+}
+
+// --- Link ---
+
+func TestLinkFollow(t *testing.T) {
+	g := testGraph(t)
+	g.Define("a", `42`)
+	val, err := g.Eval(`(follow (link 'a))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ValuesEqual(val, IntVal(42)) {
+		t.Fatalf("expected 42, got %s", val.String())
+	}
+}
+
+func TestLinkType(t *testing.T) {
+	testEval(t, `(type (link 'a))`, KeywordVal("link"))
+}
+
+func TestLinkNonexistent(t *testing.T) {
+	// Creating a link to a nonexistent symbol succeeds
+	testEval(t, `(link 'nonexistent)`, LinkVal("nonexistent"))
+}
+
+func TestFollowNonexistent(t *testing.T) {
+	g := testGraph(t)
+	_, err := g.Eval(`(follow (link 'nonexistent))`)
+	if err == nil {
+		t.Fatal("expected error following nonexistent link")
+	}
+}
+
+func TestLinkInData(t *testing.T) {
+	testEval(t, `(get (dict "ref" (link 'foo)) "ref")`, LinkVal("foo"))
+}
+
+func TestLinkTarget(t *testing.T) {
+	testEval(t, `(link-target (link 'foo))`, SymbolVal("foo"))
 }

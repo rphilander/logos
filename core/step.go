@@ -13,11 +13,13 @@ var frameKindToKeyword = map[frameKind]string{
 	frameFnArg:        "fn-arg",
 	frameIfCond:       "if-cond",
 	frameLetBind:      "let-bind",
-	frameLetrecBind:   "letrec-bind",
 	frameDo:           "do",
 	frameFormExpand:    "form-expand",
 	frameApplyFn:      "apply-fn",
 	frameApplyList:    "apply-list",
+	frameLoopBind:     "loop-bind",
+	frameLoop:         "loop",
+	frameRecurArg:     "recur-arg",
 }
 
 var keywordToFrameKind map[string]frameKind
@@ -114,7 +116,6 @@ func frameToValue(f frame) Value {
 
 	switch f.kind {
 	case frameFnBody:
-		m["tail"] = BoolVal(f.tail)
 		m["scope-base"] = IntVal(int64(f.scopeBase))
 		m["saved-node-id"] = StringVal(f.savedNodeID)
 
@@ -126,7 +127,6 @@ func frameToValue(f frame) Value {
 		m["saved-node-id"] = StringVal(f.savedNodeID)
 
 	case frameEvalHead:
-		m["tail"] = BoolVal(f.tail)
 		m["head-node"] = nodeToValue(f.headNode)
 		m["arg-nodes"] = nodesToValues(f.argNodes)
 
@@ -137,53 +137,58 @@ func frameToValue(f frame) Value {
 		m["idx"] = IntVal(int64(f.builtinIdx))
 
 	case frameFnArg:
-		m["tail"] = BoolVal(f.tail)
 		m["fn"] = FnVal(f.fn)
 		m["done"] = ListVal(f.fnDone)
 		m["args"] = nodesToValues(f.fnArgs)
 		m["idx"] = IntVal(int64(f.fnIdx))
 
 	case frameIfCond:
-		m["tail"] = BoolVal(f.tail)
 		m["then"] = nodeToValue(f.thenNode)
 		m["else"] = nodeToValue(f.elseNode)
 
 	case frameLetBind:
-		m["tail"] = BoolVal(f.tail)
 		m["bindings"] = bindingsToValue(f.bindings)
 		m["bind-pairs"] = nodesToValues(f.bindPairs)
-		m["bind-idx"] = IntVal(int64(f.bindIdx))
-		m["body"] = nodeToValue(f.bodyNode)
-		m["scope-idx"] = IntVal(int64(f.scopeIdx))
-
-	case frameLetrecBind:
-		m["tail"] = BoolVal(f.tail)
-		m["bindings"] = bindingsToValue(f.bindings)
-		m["bind-pairs"] = nodesToValues(f.bindPairs)
-		m["bind-names"] = stringsToValue(f.bindNames)
 		m["bind-idx"] = IntVal(int64(f.bindIdx))
 		m["body"] = nodeToValue(f.bodyNode)
 		m["scope-idx"] = IntVal(int64(f.scopeIdx))
 
 	case frameDo:
-		m["tail"] = BoolVal(f.tail)
 		m["exprs"] = nodesToValues(f.doExprs)
 		m["idx"] = IntVal(int64(f.doIdx))
 
 	case frameFormExpand:
-		m["tail"] = BoolVal(f.tail)
+		// no extra fields
 
 	case frameApplyFn:
-		m["tail"] = BoolVal(f.tail)
 		m["list-node"] = nodeToValue(f.applyListNode)
 
 	case frameApplyList:
-		m["tail"] = BoolVal(f.tail)
 		if f.builtin != nil {
 			m["builtin"] = BuiltinVal(f.builtinName, f.builtin)
 		} else {
 			m["fn"] = FnVal(f.applyFn)
 		}
+
+	case frameLoopBind:
+		m["bindings"] = bindingsToValue(f.bindings)
+		m["bind-pairs"] = nodesToValues(f.bindPairs)
+		m["bind-idx"] = IntVal(int64(f.bindIdx))
+		m["loop-names"] = stringsToValue(f.loopNames)
+		m["loop-body"] = nodeToValue(f.loopBody)
+		m["loop-scope-idx"] = IntVal(int64(f.loopScopeIdx))
+
+	case frameLoop:
+		m["loop-names"] = stringsToValue(f.loopNames)
+		m["loop-body"] = nodeToValue(f.loopBody)
+		m["loop-scope-idx"] = IntVal(int64(f.loopScopeIdx))
+
+	case frameRecurArg:
+		m["recur-args"] = nodesToValues(f.recurArgs)
+		doneElems := make([]Value, len(f.recurDone))
+		copy(doneElems, f.recurDone)
+		m["recur-done"] = ListVal(doneElems)
+		m["recur-idx"] = IntVal(int64(f.recurIdx))
 	}
 
 	return MapVal(m)
@@ -281,10 +286,6 @@ func valueToFrame(v Value, builtins map[string]Builtin) (frame, error) {
 
 	switch fk {
 	case frameFnBody:
-		f.tail, err = mapGetBool(m, "tail")
-		if err != nil {
-			return frame{}, err
-		}
 		f.scopeBase, err = mapGetInt(m, "scope-base")
 		if err != nil {
 			return frame{}, err
@@ -308,10 +309,6 @@ func valueToFrame(v Value, builtins map[string]Builtin) (frame, error) {
 		}
 
 	case frameEvalHead:
-		f.tail, err = mapGetBool(m, "tail")
-		if err != nil {
-			return frame{}, err
-		}
 		f.headNode, err = mapGetNode(m, "head-node")
 		if err != nil {
 			return frame{}, err
@@ -357,10 +354,6 @@ func valueToFrame(v Value, builtins map[string]Builtin) (frame, error) {
 		}
 
 	case frameFnArg:
-		f.tail, err = mapGetBool(m, "tail")
-		if err != nil {
-			return frame{}, err
-		}
 		f.fn, err = mapGetFn(m, "fn")
 		if err != nil {
 			return frame{}, err
@@ -383,10 +376,6 @@ func valueToFrame(v Value, builtins map[string]Builtin) (frame, error) {
 		}
 
 	case frameIfCond:
-		f.tail, err = mapGetBool(m, "tail")
-		if err != nil {
-			return frame{}, err
-		}
 		f.thenNode, err = mapGetNode(m, "then")
 		if err != nil {
 			return frame{}, err
@@ -397,10 +386,6 @@ func valueToFrame(v Value, builtins map[string]Builtin) (frame, error) {
 		}
 
 	case frameLetBind:
-		f.tail, err = mapGetBool(m, "tail")
-		if err != nil {
-			return frame{}, err
-		}
 		// bindings deserialized here as fallback; reconnected to locals in valueToEvalState
 		bindsVal, berr := mapGet(m, "bindings")
 		if berr != nil {
@@ -413,45 +398,6 @@ func valueToFrame(v Value, builtins map[string]Builtin) (frame, error) {
 		f.bindPairs, err = mapGetNodes(m, "bind-pairs")
 		if err != nil {
 			return frame{}, err
-		}
-		f.bindIdx, err = mapGetInt(m, "bind-idx")
-		if err != nil {
-			return frame{}, err
-		}
-		f.bodyNode, err = mapGetNode(m, "body")
-		if err != nil {
-			return frame{}, err
-		}
-		f.scopeIdx, err = mapGetInt(m, "scope-idx")
-		if err != nil {
-			return frame{}, err
-		}
-
-	case frameLetrecBind:
-		f.tail, err = mapGetBool(m, "tail")
-		if err != nil {
-			return frame{}, err
-		}
-		// bindings deserialized here as fallback; reconnected to locals in valueToEvalState
-		bindsVal, berr := mapGet(m, "bindings")
-		if berr != nil {
-			return frame{}, berr
-		}
-		f.bindings, err = valueToBindings(bindsVal)
-		if err != nil {
-			return frame{}, err
-		}
-		f.bindPairs, err = mapGetNodes(m, "bind-pairs")
-		if err != nil {
-			return frame{}, err
-		}
-		namesVal, nerr := mapGet(m, "bind-names")
-		if nerr != nil {
-			return frame{}, nerr
-		}
-		f.bindNames, err = valueToStrings(namesVal)
-		if err != nil {
-			return frame{}, fmt.Errorf("frame letrec-bind bind-names: %w", err)
 		}
 		f.bindIdx, err = mapGetInt(m, "bind-idx")
 		if err != nil {
@@ -467,10 +413,6 @@ func valueToFrame(v Value, builtins map[string]Builtin) (frame, error) {
 		}
 
 	case frameDo:
-		f.tail, err = mapGetBool(m, "tail")
-		if err != nil {
-			return frame{}, err
-		}
 		f.doExprs, err = mapGetNodes(m, "exprs")
 		if err != nil {
 			return frame{}, err
@@ -481,26 +423,15 @@ func valueToFrame(v Value, builtins map[string]Builtin) (frame, error) {
 		}
 
 	case frameFormExpand:
-		f.tail, err = mapGetBool(m, "tail")
-		if err != nil {
-			return frame{}, err
-		}
+		// no extra fields
 
 	case frameApplyFn:
-		f.tail, err = mapGetBool(m, "tail")
-		if err != nil {
-			return frame{}, err
-		}
 		f.applyListNode, err = mapGetNode(m, "list-node")
 		if err != nil {
 			return frame{}, err
 		}
 
 	case frameApplyList:
-		f.tail, err = mapGetBool(m, "tail")
-		if err != nil {
-			return frame{}, err
-		}
 		// Either "builtin" or "fn" is present
 		if bVal, ok := m["builtin"]; ok && bVal.Kind == ValBuiltin {
 			f.builtinName = bVal.BuiltinName
@@ -513,6 +444,76 @@ func valueToFrame(v Value, builtins map[string]Builtin) (frame, error) {
 			if err != nil {
 				return frame{}, err
 			}
+		}
+
+	case frameLoopBind:
+		bindsVal, berr := mapGet(m, "bindings")
+		if berr != nil {
+			return frame{}, berr
+		}
+		f.bindings, err = valueToBindings(bindsVal)
+		if err != nil {
+			return frame{}, err
+		}
+		f.bindPairs, err = mapGetNodes(m, "bind-pairs")
+		if err != nil {
+			return frame{}, err
+		}
+		f.bindIdx, err = mapGetInt(m, "bind-idx")
+		if err != nil {
+			return frame{}, err
+		}
+		namesVal, nerr := mapGet(m, "loop-names")
+		if nerr != nil {
+			return frame{}, nerr
+		}
+		f.loopNames, err = valueToStrings(namesVal)
+		if err != nil {
+			return frame{}, err
+		}
+		f.loopBody, err = mapGetNode(m, "loop-body")
+		if err != nil {
+			return frame{}, err
+		}
+		f.loopScopeIdx, err = mapGetInt(m, "loop-scope-idx")
+		if err != nil {
+			return frame{}, err
+		}
+
+	case frameLoop:
+		namesVal, nerr := mapGet(m, "loop-names")
+		if nerr != nil {
+			return frame{}, nerr
+		}
+		f.loopNames, err = valueToStrings(namesVal)
+		if err != nil {
+			return frame{}, err
+		}
+		f.loopBody, err = mapGetNode(m, "loop-body")
+		if err != nil {
+			return frame{}, err
+		}
+		f.loopScopeIdx, err = mapGetInt(m, "loop-scope-idx")
+		if err != nil {
+			return frame{}, err
+		}
+
+	case frameRecurArg:
+		f.recurArgs, err = mapGetNodes(m, "recur-args")
+		if err != nil {
+			return frame{}, err
+		}
+		doneVal, derr := mapGet(m, "recur-done")
+		if derr != nil {
+			return frame{}, derr
+		}
+		f.recurDone, err = valuesToValues(doneVal)
+		if err != nil {
+			return frame{}, err
+		}
+		f.recurIdx, err = mapGetInt(m, "recur-idx")
+		if err != nil {
+			return frame{}, err
 		}
 	}
 
@@ -562,9 +563,6 @@ func evalStateToValue(es *evalState, locals []map[string]Value, nodeID string, f
 
 	// Node ID
 	m["node-id"] = StringVal(nodeID)
-
-	// Tail
-	m["tail"] = BoolVal(es.tail)
 
 	// Fuel
 	if fuelSet {
@@ -630,11 +628,6 @@ func valueToEvalState(v Value, builtins map[string]Builtin) (es *evalState, loca
 		return nil, nil, "", nil, fmt.Errorf("step-continue: unknown status %q", statusVal.Str)
 	}
 
-	// Tail
-	if tailVal, ok := m["tail"]; ok && tailVal.Kind == ValBool {
-		es.tail = tailVal.Bool
-	}
-
 	// Stack
 	stackVal, serr2 := mapGet(m, "stack")
 	if serr2 != nil {
@@ -669,13 +662,18 @@ func valueToEvalState(v Value, builtins map[string]Builtin) (es *evalState, loca
 		}
 	}
 
-	// Reconnect let/letrec frame bindings to their shared scope in locals.
+	// Reconnect let/loop frame bindings to their shared scope in locals.
 	// The evaluator relies on frame.bindings and locals[scopeIdx] being the same map.
 	for i := range es.stack {
 		f := &es.stack[i]
-		if f.kind == frameLetBind || f.kind == frameLetrecBind {
+		if f.kind == frameLetBind {
 			if f.scopeIdx >= 0 && f.scopeIdx < len(locals) {
 				f.bindings = locals[f.scopeIdx]
+			}
+		}
+		if f.kind == frameLoopBind {
+			if f.loopScopeIdx >= 0 && f.loopScopeIdx < len(locals) {
+				f.bindings = locals[f.loopScopeIdx]
 			}
 		}
 	}
@@ -713,7 +711,6 @@ func (e *Evaluator) builtinStepEval(args []Value) (Value, error) {
 	es := &evalState{
 		node:       node,
 		evaluating: true,
-		tail:       false,
 	}
 
 	// Initial state: no locals, empty currentNodeID, no fuel

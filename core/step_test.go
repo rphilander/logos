@@ -192,10 +192,9 @@ func TestStepContinueDo(t *testing.T) {
 	}
 }
 
-func TestStepContinueLetrec(t *testing.T) {
+func TestStepContinueLet(t *testing.T) {
 	ev := makeStepEval()
-	// Simple letrec without recursion
-	state, err := ev.builtinStepEval([]Value{StringVal("(letrec (x 10 y 20) (add x y))")})
+	state, err := ev.builtinStepEval([]Value{StringVal("(let (x 10 y 20) (add x y))")})
 	if err != nil {
 		t.Fatalf("step-eval error: %v", err)
 	}
@@ -312,7 +311,7 @@ func TestStepStateHasRequiredFields(t *testing.T) {
 	}
 
 	// Required fields should be present
-	for _, key := range []string{"status", "node", "stack", "locals", "node-id", "tail"} {
+	for _, key := range []string{"status", "node", "stack", "locals", "node-id"} {
 		if getField(state, key).Kind == ValNil && key != "node-id" {
 			t.Errorf("missing field %q in initial state", key)
 		}
@@ -482,14 +481,14 @@ func TestFrameRoundtrip(t *testing.T) {
 
 	// Test various frame types roundtrip through serialization
 	frames := []frame{
-		{kind: frameFnBody, tail: true, scopeBase: 2, savedNodeID: "node:x-1"},
+		{kind: frameFnBody, scopeBase: 2, savedNodeID: "node:x-1"},
 		{kind: frameScopeCleanup},
 		{kind: frameRef, refNodeID: "node:foo-3", savedNodeID: "node:bar-1"},
-		{kind: frameIfCond, tail: true, thenNode: &Node{Kind: NodeInt, Int: 1}, elseNode: &Node{Kind: NodeInt, Int: 2}},
-		{kind: frameDo, tail: false, doExprs: []*Node{{Kind: NodeInt, Int: 1}, {Kind: NodeInt, Int: 2}}, doIdx: 0},
-		{kind: frameFormExpand, tail: true},
-		{kind: frameApplyFn, tail: false, applyListNode: &Node{Kind: NodeSymbol, Str: "xs"}},
-		{kind: frameApplyList, tail: true, applyFn: &FnValue{Params: []string{"x"}, Body: &Node{Kind: NodeSymbol, Str: "x"}}},
+		{kind: frameIfCond, thenNode: &Node{Kind: NodeInt, Int: 1}, elseNode: &Node{Kind: NodeInt, Int: 2}},
+		{kind: frameDo, doExprs: []*Node{{Kind: NodeInt, Int: 1}, {Kind: NodeInt, Int: 2}}, doIdx: 0},
+		{kind: frameFormExpand},
+		{kind: frameApplyFn, applyListNode: &Node{Kind: NodeSymbol, Str: "xs"}},
+		{kind: frameApplyList, applyFn: &FnValue{Params: []string{"x"}, Body: &Node{Kind: NodeSymbol, Str: "x"}}},
 	}
 
 	for i, f := range frames {
@@ -500,9 +499,6 @@ func TestFrameRoundtrip(t *testing.T) {
 		}
 		if f2.kind != f.kind {
 			t.Fatalf("frame[%d] kind mismatch: %d vs %d", i, f2.kind, f.kind)
-		}
-		if f2.tail != f.tail {
-			t.Fatalf("frame[%d] tail mismatch: %v vs %v", i, f2.tail, f.tail)
 		}
 	}
 }
@@ -559,8 +555,8 @@ func TestStepEvalViaEvalString(t *testing.T) {
 
 func TestStepRecursiveFn(t *testing.T) {
 	ev := makeStepEval()
-	// Factorial via letrec
-	expr := `(letrec (fact (fn (n) (if (eq n 0) 1 (mul n (fact (sub n 1)))))) (fact 5))`
+	// Factorial via loop/recur
+	expr := `(loop ((n 5) (acc 1)) (if (eq n 0) acc (recur (sub n 1) (mul acc n))))`
 	state, err := ev.builtinStepEval([]Value{StringVal(expr)})
 	if err != nil {
 		t.Fatalf("step-eval error: %v", err)
@@ -581,6 +577,21 @@ func TestStepRestParams(t *testing.T) {
 		t.Fatalf("step-eval error: %v", err)
 	}
 	state = stepToCompletion(t, ev, state, 200)
+	result := getField(state, "result")
+	if !ValuesEqual(result, IntVal(3)) {
+		t.Fatalf("expected 3, got %s", result.String())
+	}
+}
+
+// --- Loop ---
+
+func TestStepLoop(t *testing.T) {
+	ev := makeStepEval()
+	state, err := ev.builtinStepEval([]Value{StringVal("(loop ((x 0)) (if (eq x 3) x (recur (add x 1))))")})
+	if err != nil {
+		t.Fatalf("step-eval error: %v", err)
+	}
+	state = stepToCompletion(t, ev, state, 500)
 	result := getField(state, "result")
 	if !ValuesEqual(result, IntVal(3)) {
 		t.Fatalf("expected 3, got %s", result.String())

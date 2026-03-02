@@ -8,7 +8,8 @@ A `lang` library (`data/lang.logos`) containing a self-validating language refer
 - **`lang`** root node — top-level entry point for the whole reference
 - **`lang-types`** — 13 type nodes + 2 concept nodes, with `members` and `concepts` as direct graph references
 - **`lang-forms`** — 9 core form nodes, with `members` as direct graph references
-- **106 example/test nodes** (`lang-ex-*` for examples, `lang-test-*` for tests)
+- **`lang-builtins`** — 31 builtins across 10 category nodes, with `members` as direct graph references
+- **Example/test nodes** (`lang-ex-*` for examples, `lang-test-*` for tests)
 - **Functions**: `lang-validate`, `lang-describe`, `lang-search`, `lang-run-test`, `lang-collect-tests`
 
 ### Conventions
@@ -47,7 +48,7 @@ This works but is heavyweight — spinning up the step evaluator just to derefer
 ## Still To Build (lang library)
 
 - ~~**Core forms** section~~ ✓ — 9 forms, 38 tests, all passing
-- **Builtins** section: all 31, grouped by category
+- **Builtins** section — 31 builtins defined across 10 categories, **awaiting final validation** (blocked by stack overflow — see `resolver-stack-overflow.md`)
 - **Syntax** section: S-expressions, quote reader macro, keyword syntax, rest params
 - **Concepts** section: closures, recursion, TCO, scoping, graph resolution
 
@@ -113,6 +114,14 @@ A target in `refresh-all` means "I am already correct — re-resolve things that
 
 ### 3. `see-also` cross-references
 Established a convention for explicit semantic links between related nodes. Three form→type links: `lang-form-fn` → `lang-type-fn`, `lang-form-form` → `lang-type-form`, `lang-form-quote` → `lang-type-symbol`. These are real graph references visible to `ref-by`, `dependents`, `downstream`.
+
+## Blocker: Resolver Stack Overflow
+
+Evaluating `lang-builtins` (or `lang` which includes it) causes a **Go stack overflow** — 1GB goroutine stack exhausted, 1.4M frames elided. The root cause is infinite recursion in the resolver's eval-on-access pattern. Full analysis in `resolver-stack-overflow.md`. This blocks `(lang-validate lang-builtins)` and must be fixed before the builtins section is complete.
+
+**Workaround options** (if fixing the root cause is deferred):
+- Remove `see-also` node-refs from builtin nodes (or replace with inert strings)
+- Validate each category independently: `(lang-validate lang-builtins-data)` etc.
 
 ## Enhancements (after lang library is complete)
 

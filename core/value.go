@@ -23,6 +23,7 @@ const (
 	ValNodeRef
 	ValForm
 	ValBuiltin
+	ValLink
 )
 
 type FnValue struct {
@@ -68,6 +69,7 @@ func FormVal(fn *FnValue) Value { return Value{Kind: ValForm, Fn: fn} }
 func BuiltinVal(name string, fn Builtin) Value {
 	return Value{Kind: ValBuiltin, BuiltinName: name, BuiltinFunc: fn}
 }
+func LinkVal(name string) Value { return Value{Kind: ValLink, Str: name} }
 
 // Truthy implements nil-as-flow: nil and false are falsy, everything else is truthy.
 func (v Value) Truthy() bool {
@@ -152,6 +154,8 @@ func (v Value) String() string {
 		return "(dict " + strings.Join(parts, " ") + ")"
 	case ValBuiltin:
 		return fmt.Sprintf("<builtin:%s>", v.BuiltinName)
+	case ValLink:
+		return fmt.Sprintf("<link:%s>", v.Str)
 	case ValNil:
 		return "nil"
 	default:
@@ -187,6 +191,8 @@ func (v Value) KindName() string {
 		return "Form"
 	case ValBuiltin:
 		return "Builtin"
+	case ValLink:
+		return "Link"
 	default:
 		return "Unknown"
 	}
@@ -239,6 +245,8 @@ func ValuesEqual(a, b Value) bool {
 		return a.Str == b.Str
 	case ValBuiltin:
 		return a.BuiltinName == b.BuiltinName
+	case ValLink:
+		return a.Str == b.Str
 	}
 	return false
 }
@@ -290,6 +298,8 @@ func ValueToGo(v Value) (any, error) {
 		return nil, fmt.Errorf("cannot serialize Form to JSON")
 	case ValBuiltin:
 		return "builtin:" + v.BuiltinName, nil
+	case ValLink:
+		return "link:" + v.Str, nil
 	default:
 		return nil, fmt.Errorf("unknown value kind")
 	}
@@ -310,6 +320,9 @@ func GoToValue(v any) Value {
 	case string:
 		if strings.HasPrefix(val, "node:") {
 			return NodeRefVal(val)
+		}
+		if strings.HasPrefix(val, "link:") {
+			return LinkVal(val[5:])
 		}
 		if strings.HasPrefix(val, "builtin:") {
 			return Value{Kind: ValBuiltin, BuiltinName: val[8:]}

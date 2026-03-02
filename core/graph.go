@@ -34,8 +34,8 @@ type Graph struct {
 
 // coreFormKeywords are symbols that should not be resolved during define.
 var coreFormKeywords = map[string]bool{
-	"if": true, "let": true, "letrec": true, "do": true, "fn": true, "form": true, "quote": true,
-	"apply": true, "sort-by": true,
+	"if": true, "let": true, "do": true, "fn": true, "form": true, "quote": true,
+	"apply": true, "sort-by": true, "loop": true, "recur": true,
 }
 
 // --- Path helpers ---
@@ -83,7 +83,6 @@ func NewGraph(dir string, builtins map[string]Builtin) (*Graph, error) {
 	ev := &Evaluator{
 		Builtins: builtins,
 	}
-	ev.Resolve = g.makeResolver(ev)
 	ev.ResolveNode = g.resolveNode
 	builtins["assert"] = ev.builtinAssert
 	builtins["step-eval"] = ev.builtinStepEval
@@ -107,37 +106,21 @@ func NewGraph(dir string, builtins map[string]Builtin) (*Graph, error) {
 	return g, nil
 }
 
-func (g *Graph) makeResolver(ev *Evaluator) Resolver {
-	return func(name string) (Value, bool) {
-		if strings.HasPrefix(name, "node:") {
-			node, ok := g.nodes[name]
-			if !ok {
-				return Value{}, false
-			}
-			val, err := ev.Eval(node.Expr)
-			if err != nil {
-				return Value{}, false
-			}
-			if val.Kind == ValFn || val.Kind == ValForm {
-				val.Fn.NodeID = name
-			}
-			return val, true
-		}
-
-		nodeID, ok := g.symbols[name]
-		if !ok {
-			return Value{}, false
-		}
-		node := g.nodes[nodeID]
-		val, err := ev.Eval(node.Expr)
-		if err != nil {
-			return Value{}, false
-		}
-		if val.Kind == ValFn || val.Kind == ValForm {
-			val.Fn.NodeID = nodeID
-		}
-		return val, true
+// EvalSymbol looks up a symbol by name, evaluates it, and returns the result.
+func (g *Graph) EvalSymbol(name string) (Value, error) {
+	nodeID, ok := g.symbols[name]
+	if !ok {
+		return Value{}, fmt.Errorf("undefined symbol: %s", name)
 	}
+	node := g.nodes[nodeID]
+	val, err := g.eval.Eval(node.Expr)
+	if err != nil {
+		return Value{}, err
+	}
+	if val.Kind == ValFn || val.Kind == ValForm {
+		val.Fn.NodeID = nodeID
+	}
+	return val, nil
 }
 
 func (g *Graph) resolveNode(nodeID string) (*Node, error) {
@@ -177,7 +160,10 @@ func (g *Graph) Define(name, expr string) (*GraphNode, error) {
 	}
 
 	var refs []Ref
-	resolved := g.resolveAST(parsed, &refs, nil)
+	resolved, resolveErr := g.resolveAST(parsed, &refs, nil)
+	if resolveErr != nil {
+		return nil, fmt.Errorf("define %s: %w", name, resolveErr)
+	}
 
 	nodeID := g.makeNodeID(name, g.activeLib)
 
@@ -222,7 +208,16 @@ func (g *Graph) Delete(name string) error {
 }
 
 func (g *Graph) Eval(expr string) (Value, error) {
-	return g.eval.EvalString(expr)
+	parsed, err := Parse(expr)
+	if err != nil {
+		return Value{}, fmt.Errorf("parse error: %w", err)
+	}
+	var refs []Ref
+	resolved, resolveErr := g.resolveAST(parsed, &refs, nil)
+	if resolveErr != nil {
+		return Value{}, resolveErr
+	}
+	return g.eval.Eval(resolved)
 }
 
 func (g *Graph) Lookup(name string) (*GraphNode, bool) {
@@ -235,7 +230,11 @@ func (g *Graph) Lookup(name string) (*GraphNode, bool) {
 
 // ResolveSymbol looks up a symbol by name and evaluates it to a Value.
 func (g *Graph) ResolveSymbol(name string) (Value, bool) {
-	return g.eval.Resolve(name)
+	val, err := g.EvalSymbol(name)
+	if err != nil {
+		return Value{}, false
+	}
+	return val, true
 }
 
 func (g *Graph) List() []string {
@@ -263,26 +262,32 @@ func copyBoundNames(m map[string]bool) map[string]bool {
 	return cp
 }
 
-func (g *Graph) resolveAST(node *Node, refs *[]Ref, boundNames map[string]bool) *Node {
+func (g *Graph) resolveAST(node *Node, refs *[]Ref, boundNames map[string]bool) (*Node, error) {
 	switch node.Kind {
 	case NodeSymbol:
 		if boundNames[node.Str] {
-			return node
+			return node, nil
 		}
 		if strings.HasPrefix(node.Str, "node:") {
 			nodeID := node.Str
 			*refs = append(*refs, Ref{Symbol: node.Str, NodeID: nodeID})
-			return &Node{Kind: NodeRef, Str: node.Str, Ref: nodeID}
+			return &Node{Kind: NodeRef, Str: node.Str, Ref: nodeID}, nil
 		}
 		if nodeID, ok := g.symbols[node.Str]; ok {
 			*refs = append(*refs, Ref{Symbol: node.Str, NodeID: nodeID})
-			return &Node{Kind: NodeRef, Str: node.Str, Ref: nodeID}
+			return &Node{Kind: NodeRef, Str: node.Str, Ref: nodeID}, nil
 		}
-		return node
+		// Resolve builtins in non-head position
+		if g.eval.Builtins != nil {
+			if _, ok := g.eval.Builtins[node.Str]; ok {
+				return &Node{Kind: NodeBuiltin, Str: node.Str}, nil
+			}
+		}
+		return nil, fmt.Errorf("unresolved symbol: %s", node.Str)
 
 	case NodeList:
 		if len(node.Children) == 0 {
-			return node
+			return node, nil
 		}
 
 		head := node.Children[0]
@@ -304,12 +309,16 @@ func (g *Graph) resolveAST(node *Node, refs *[]Ref, boundNames map[string]bool) 
 							}
 						}
 					}
-					newChildren[2] = g.resolveAST(node.Children[2], refs, innerBound)
+					resolved, err := g.resolveAST(node.Children[2], refs, innerBound)
+					if err != nil {
+						return nil, err
+					}
+					newChildren[2] = resolved
 				}
 				for i := 3; i < len(node.Children); i++ {
 					newChildren[i] = node.Children[i]
 				}
-				return &Node{Kind: NodeList, Children: newChildren}
+				return &Node{Kind: NodeList, Children: newChildren}, nil
 
 			case "let":
 				newChildren[0] = head
@@ -318,13 +327,88 @@ func (g *Graph) resolveAST(node *Node, refs *[]Ref, boundNames map[string]bool) 
 					bindingsNode := node.Children[1]
 					if bindingsNode.Kind == NodeList {
 						newBindings := make([]*Node, len(bindingsNode.Children))
+						// Detect flat vs nested pair syntax
+						isFlat := len(bindingsNode.Children) == 0 ||
+							bindingsNode.Children[0].Kind != NodeList
+						if isFlat {
+							// Flat alternating: (let (name val name val ...) body)
+							for i := 0; i < len(bindingsNode.Children); i += 2 {
+								nameNode := bindingsNode.Children[i]
+								newBindings[i] = nameNode
+								if i+1 < len(bindingsNode.Children) {
+									resolved, err := g.resolveAST(bindingsNode.Children[i+1], refs, innerBound)
+									if err != nil {
+										return nil, err
+									}
+									newBindings[i+1] = resolved
+								}
+								if nameNode.Kind == NodeSymbol {
+									innerBound[nameNode.Str] = true
+								}
+							}
+						} else {
+							// Nested pair: (let ((name val) (name val) ...) body)
+							for i, pair := range bindingsNode.Children {
+								if pair.Kind == NodeList && len(pair.Children) == 2 {
+									resolved, err := g.resolveAST(pair.Children[1], refs, innerBound)
+									if err != nil {
+										return nil, err
+									}
+									newBindings[i] = &Node{
+										Kind: NodeList,
+										Children: []*Node{
+											pair.Children[0],
+											resolved,
+										},
+									}
+									if pair.Children[0].Kind == NodeSymbol {
+										innerBound[pair.Children[0].Str] = true
+									}
+								} else {
+									newBindings[i] = pair
+								}
+							}
+						}
+						newChildren[1] = &Node{Kind: NodeList, Children: newBindings}
+					} else {
+						newChildren[1] = bindingsNode
+					}
+				}
+				if len(node.Children) >= 3 {
+					resolved, err := g.resolveAST(node.Children[2], refs, innerBound)
+					if err != nil {
+						return nil, err
+					}
+					newChildren[2] = resolved
+				}
+				for i := 3; i < len(node.Children); i++ {
+					newChildren[i] = node.Children[i]
+				}
+				return &Node{Kind: NodeList, Children: newChildren}, nil
+
+			case "quote":
+				// Don't resolve anything inside quote
+				return node, nil
+
+			case "loop":
+				// (loop ((name1 val1) (name2 val2)) body) — like let with nested pairs
+				newChildren[0] = head
+				innerBound := copyBoundNames(boundNames)
+				if len(node.Children) >= 2 {
+					bindingsNode := node.Children[1]
+					if bindingsNode.Kind == NodeList {
+						newBindings := make([]*Node, len(bindingsNode.Children))
 						for i, pair := range bindingsNode.Children {
 							if pair.Kind == NodeList && len(pair.Children) == 2 {
+								resolved, err := g.resolveAST(pair.Children[1], refs, innerBound)
+								if err != nil {
+									return nil, err
+								}
 								newBindings[i] = &Node{
 									Kind: NodeList,
 									Children: []*Node{
 										pair.Children[0],
-										g.resolveAST(pair.Children[1], refs, innerBound),
+										resolved,
 									},
 								}
 								if pair.Children[0].Kind == NodeSymbol {
@@ -340,46 +424,58 @@ func (g *Graph) resolveAST(node *Node, refs *[]Ref, boundNames map[string]bool) 
 					}
 				}
 				if len(node.Children) >= 3 {
-					newChildren[2] = g.resolveAST(node.Children[2], refs, innerBound)
+					resolved, err := g.resolveAST(node.Children[2], refs, innerBound)
+					if err != nil {
+						return nil, err
+					}
+					newChildren[2] = resolved
 				}
 				for i := 3; i < len(node.Children); i++ {
 					newChildren[i] = node.Children[i]
 				}
-				return &Node{Kind: NodeList, Children: newChildren}
-
-			case "quote":
-				// Don't resolve anything inside quote
-				return node
+				return &Node{Kind: NodeList, Children: newChildren}, nil
 			}
 
 			// Core form keywords and builtins: don't resolve the head
 			if coreFormKeywords[head.Str] {
 				newChildren[0] = head
 				for i := 1; i < len(node.Children); i++ {
-					newChildren[i] = g.resolveAST(node.Children[i], refs, boundNames)
+					resolved, err := g.resolveAST(node.Children[i], refs, boundNames)
+					if err != nil {
+						return nil, err
+					}
+					newChildren[i] = resolved
 				}
-				return &Node{Kind: NodeList, Children: newChildren}
+				return &Node{Kind: NodeList, Children: newChildren}, nil
 			}
 
 			if g.eval.Builtins != nil {
 				if _, ok := g.eval.Builtins[head.Str]; ok {
-					newChildren[0] = head
+					newChildren[0] = &Node{Kind: NodeBuiltin, Str: head.Str}
 					for i := 1; i < len(node.Children); i++ {
-						newChildren[i] = g.resolveAST(node.Children[i], refs, boundNames)
+						resolved, err := g.resolveAST(node.Children[i], refs, boundNames)
+						if err != nil {
+							return nil, err
+						}
+						newChildren[i] = resolved
 					}
-					return &Node{Kind: NodeList, Children: newChildren}
+					return &Node{Kind: NodeList, Children: newChildren}, nil
 				}
 			}
 		}
 
 		// Generic list: resolve all children including head
 		for i, child := range node.Children {
-			newChildren[i] = g.resolveAST(child, refs, boundNames)
+			resolved, err := g.resolveAST(child, refs, boundNames)
+			if err != nil {
+				return nil, err
+			}
+			newChildren[i] = resolved
 		}
-		return &Node{Kind: NodeList, Children: newChildren}
+		return &Node{Kind: NodeList, Children: newChildren}, nil
 
 	default:
-		return node
+		return node, nil
 	}
 }
 
@@ -390,6 +486,7 @@ func (g *Graph) graphBuiltins() map[string]Builtin {
 		"symbols":   g.builtinSymbols,
 		"node-expr": g.builtinNodeExpr,
 		"ref-by":    g.builtinRefBy,
+		"follow":    g.builtinFollow,
 	}
 }
 
@@ -469,6 +566,29 @@ func (g *Graph) builtinRefBy(args []Value) (Value, error) {
 		return result[i].Str < result[j].Str
 	})
 	return ListVal(result), nil
+}
+
+func (g *Graph) builtinFollow(args []Value) (Value, error) {
+	if len(args) != 1 {
+		return Value{}, fmt.Errorf("follow: expected 1 arg (link), got %d", len(args))
+	}
+	if args[0].Kind != ValLink {
+		return Value{}, fmt.Errorf("follow: expected Link, got %s", args[0].KindName())
+	}
+	name := args[0].Str
+	nodeID, ok := g.symbols[name]
+	if !ok {
+		return Value{}, fmt.Errorf("follow: undefined symbol: %s", name)
+	}
+	node := g.nodes[nodeID]
+	val, err := g.eval.Eval(node.Expr)
+	if err != nil {
+		return Value{}, fmt.Errorf("follow: eval %s: %w", name, err)
+	}
+	if val.Kind == ValFn || val.Kind == ValForm {
+		val.Fn.NodeID = nodeID
+	}
+	return val, nil
 }
 
 // --- Refresh ---
@@ -553,7 +673,10 @@ func (g *Graph) RefreshAll(targets []string, dry bool) (*RefreshResult, error) {
 		}
 
 		var refs []Ref
-		resolved := g.resolveAST(parsed, &refs, nil)
+		resolved, resolveErr := g.resolveAST(parsed, &refs, nil)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("refresh-all: resolve %s: %w", name, resolveErr)
+		}
 
 		owner := g.symbolOwner[name]
 		newNodeID := g.makeNodeID(name, owner)
@@ -701,7 +824,10 @@ func (g *Graph) replayEntryForLib(entry, libName string) error {
 		}
 
 		var refs []Ref
-		resolved := g.resolveAST(parsed, &refs, nil)
+		resolved, resolveErr := g.resolveAST(parsed, &refs, nil)
+		if resolveErr != nil {
+			return fmt.Errorf("define %s: %w", name, resolveErr)
+		}
 
 		nodeID := g.makeNodeID(name, libName)
 

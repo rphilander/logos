@@ -16,9 +16,10 @@ const (
 	NodeString
 	NodeSymbol
 	NodeList
-	NodeRef // resolved reference: Str = original symbol name, Ref = node ID
+	NodeRef     // resolved reference: Str = original symbol name, Ref = node ID
 	NodeNil
 	NodeKeyword
+	NodeBuiltin // resolved builtin: Str = builtin name
 )
 
 type Node struct {
@@ -52,6 +53,8 @@ func (n *Node) String() string {
 		return "nil"
 	case NodeKeyword:
 		return ":" + n.Str
+	case NodeBuiltin:
+		return n.Str
 	case NodeList:
 		parts := make([]string, len(n.Children))
 		for i, c := range n.Children {
