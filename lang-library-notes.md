@@ -49,8 +49,8 @@ This works but is heavyweight — spinning up the step evaluator just to derefer
 
 - ~~**Core forms** section~~ ✓ — 10 forms (added loop, recur; removed letrec), 41 tests
 - ~~**Builtins** section~~ ✓ — 35 builtins across 12 categories (added Indirection and Step Debugger), 110 tests. Uses `(link 'symbol)` for all see-also cross-references.
-- **Syntax** section: S-expressions, quote reader macro, keyword syntax, rest params
-- **Concepts** section: closures, scoping, graph resolution, define-time symbol resolution, loop/recur iteration, link/follow indirection
+- ~~**Syntax** section~~ ✓ — 7 nodes (S-expressions, atoms, strings, keywords, quote/tick, rest params, comments), 24 tests.
+- ~~**Concepts** section~~ ✓ — 5 nodes (closures, define-time resolution, iteration, indirection, graph), 17 tests.
 
 ## Still To Build (other libraries)
 

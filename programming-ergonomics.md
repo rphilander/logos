@@ -92,6 +92,68 @@ In traditional Lisp style, you break things into many small composable functions
 
 The AST-level diff/patch idea could resolve this tension — define small functions, modify them with surgical operations instead of full redefinitions.
 
+## Arg Order and Arity Pitfalls
+
+### `append` is strictly binary
+`append` takes exactly 2 list arguments. Calling `(append a b c)` does not produce a clear arity error — instead, excess args may be silently misinterpreted, producing confusing downstream errors like `len: expected List or Map, got String`. Chain calls instead: `(append (append a b) c)`.
+
+### `member?` arg order: list first
+`member?` takes `(xs x)` — list first, element second. Writing `(member? item list)` passes the item (often a string) as the list to iterate, which triggers `(empty? str)` → `(len str)` → `len: expected List or Map, got String`. The fix is `(member? list item)`.
+
+### `and`/`or` take exactly 2 args
+`and` and `or` are user-defined forms (in base library), not variadic. Writing `(and a b c)` produces `form: expected 2 args, got 3`. Nest instead: `(and (and a b) c)` or `(and a (and b c))`. Same for `or`.
+
+### Fuel defaults and explicit limits
+The global fuel default is 0 (unlimited). This means passing an explicit low `fuel` parameter to `logos_eval` can cause unnecessary `fuel exhausted` errors on functions that do real work (batch operations, tree walks with module calls). `arch-validate` needed ~100k+ steps for 63 anchors.
+
+**Open question:** Should we set a reasonable global default (e.g., 500k) as a safety net against runaway evaluation, rather than leaving it unlimited? Currently unlimited means a bug could hang the system indefinitely. A high default would catch runaways while still allowing complex operations.
+
+### General pattern
+Both pitfalls produce the same opaque error (`len: expected List or Map, got String`) far from the actual mistake. When this error appears, check:
+1. Are any multi-arg builtins receiving too many args?
+2. Is `member?` being called with swapped args?
+3. Is a string being passed where a list is expected?
+
+## Session-to-Library Workflow
+
+Every function follows a ritual: define in session → test → delete → open library → redefine → close library. That's 5 tool calls of ceremony per function. It works reliably but adds overhead, especially when defining multiple related functions (e.g., `arch-collect-anchors` then `arch-validate` then `arch-search`).
+
+**Idea:** A `define-in` operation that targets a library directly without open/close. Or a `promote` operation that moves a session symbol into a named library. Either would cut the ceremony in half.
+
+## Explicit Stack Management
+
+The no-recursion constraint (by design — eliminates stack overflow, enables step debugger) means every tree walk needs a manual stack with `loop`/`recur`. This is a fundamental style difference from traditional Lisp and the most common pattern in non-trivial logos functions.
+
+**The pattern:**
+```
+(loop ((stack (list root)) (acc (list)))
+  (if (empty? stack)
+    acc
+    (let (cur (head stack)
+          children ...)
+      (recur (append children (rest stack))
+             (append acc own-results)))))
+```
+
+All tree-walking functions follow this: `lang-describe`, `lang-search-in`, `lang-collect-tests`, `arch-collect-anchors`, `arch-describe`, `arch-search`. Worth internalizing early — it's how you write any recursive-shaped computation in logos.
+
+**Variations:**
+- DFS: `(append children rest-stack)` — children first
+- BFS: `(append rest-stack children)` — siblings first
+- Carrying extra state: stack entries as `(list node level path)` tuples
+- Dedup: track `seen` list alongside `acc` (used in `arch-collect-anchors` for shared interactions, `arch-search` for shared results)
+
+## Reading Code Back
+
+`node-expr` returns fully resolved ASTs with node-refs like `node:base/filter-1` instead of `filter`. Understanding an existing function means mentally mapping refs back to symbol names. For example, `(node:base/empty?-1 sym:stack)` requires knowing that `node:base/empty?-1` is `empty?`.
+
+This makes code review, learning from existing functions, and debugging harder than necessary. During this project, understanding `lang-describe` and `lang-search` required careful study of their resolved ASTs.
+
+**Ideas:**
+- A pretty-printer that reverses node-refs to symbol names using the current symbol table
+- A `source` operation that returns the original source string (already stored in GraphNode) rather than the resolved AST
+- The debug library's `ref-display` and `make-rev-syms` are steps in this direction but aren't integrated into the main workflow
+
 ## Future: Skills for Common Patterns
 
 Recurring workflows could become skills:

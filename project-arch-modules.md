@@ -106,18 +106,20 @@ Interaction nodes are shared: both concept nodes reference the same interaction 
 - Line numbers informational only, not stored in anchors.
 - Only committed code anchored.
 
-## Phase 4: Remaining Work
+## Phase 4: Arch Functions ✓ COMPLETE
 
-### arch-validate function
-Build `arch-validate` in the arch library: walks the tree, collects all anchor nodes, batch-sends to mod-go via `validate-anchors`, reports valid/changed/not_found. When changed, the LLM can use mod-git to see what commits caused the change and decide whether to refresh or update.
+### arch-validate ✓
+`arch-validate` and helper `arch-collect-anchors` in the arch library. Walks the tree (concepts + interactions, deduplicating shared interactions), collects all anchor nodes, deduplicates by symbol, batch-sends to mod-go via `validate-anchors`. Returns `{:total :valid :changed :not-found :details}`. 63 unique anchors validated. When anchors show as changed, the LLM can use mod-git to see what commits caused the change and decide whether to refresh or update.
 
-### arch-describe function
-Wiki-style markdown generation for arch nodes. Can pull live source snippets via mod-go anchors. Different detail levels (brief/full). Links to lang nodes render as cross-references.
+### arch-describe ✓
+Wiki-style markdown generation for arch nodes. Loop-based tree walk (no recursion). Two modes:
+- `:brief` — header + keywords + compact lists of anchor/interaction names; for root, lists members as summaries
+- `:full` — header + keywords + expanded anchors (name, file, scope, description) + expanded interactions + see-also links; for root, recurses into all concept members
 
-### arch-search function
-Keyword search across arch nodes. Generalize lang-search to work across both libraries. Keywords on concept and interaction nodes enable discovery.
+### arch-search ✓
+Keyword search across concepts, interactions, and anchors. Reuses `lang-search-matches?` for generic matching (name, description, keywords). Tree walk covers root → concepts → interactions → anchors. Deduplicates results by symbol (shared interactions appear once). Depth parameter controls result detail: 0 = name/symbol/path, 1 = + description, 2 = + file/scope (anchors) or keywords (concepts/interactions).
 
-### docs library extraction (Phase 2)
+### docs library extraction (Phase 2) — DEFERRED
 After building arch-validate/describe/search, extract shared patterns into `data/docs.logos`. The tree-walking, validation dispatch, and description generation are analogous between lang and arch.
 
 ## Decisions Log

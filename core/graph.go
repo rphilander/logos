@@ -1047,6 +1047,129 @@ func (g *Graph) LibraryCompact(name string) error {
 	return os.WriteFile(path, []byte(sb.String()), 0644)
 }
 
+func (g *Graph) Promote(name, targetLib string) (*GraphNode, error) {
+	// Symbol must exist
+	nodeID, ok := g.symbols[name]
+	if !ok {
+		return nil, fmt.Errorf("promote: unknown symbol: %s", name)
+	}
+
+	// Must be session-owned
+	owner := g.symbolOwner[name]
+	if owner != "" {
+		return nil, fmt.Errorf("promote: %s is owned by library %q, not session", name, owner)
+	}
+
+	// No library currently open
+	if g.activeLib != "" {
+		return nil, fmt.Errorf("promote: library %q is open; close it first", g.activeLib)
+	}
+
+	// Target library must exist
+	found := false
+	for _, lib := range g.libraries {
+		if lib == targetLib {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("promote: target library %q not found", targetLib)
+	}
+
+	// Get source from current node
+	source := g.nodes[nodeID].Source
+
+	// Remove session ownership so Define won't reject it
+	delete(g.symbolOwner, name)
+
+	// Open target library, define there, close it
+	if err := g.LibraryOpen(targetLib); err != nil {
+		g.symbolOwner[name] = "" // restore on error
+		return nil, fmt.Errorf("promote: %w", err)
+	}
+	node, err := g.Define(name, source)
+	if err != nil {
+		g.symbolOwner[name] = "" // restore on error
+		g.LibraryClose()
+		return nil, fmt.Errorf("promote: %w", err)
+	}
+	if err := g.LibraryClose(); err != nil {
+		return nil, fmt.Errorf("promote: %w", err)
+	}
+
+	// Compact session log to purge the old define
+	if err := g.compactSession(); err != nil {
+		return nil, fmt.Errorf("promote: compact session: %w", err)
+	}
+
+	return node, nil
+}
+
+func (g *Graph) compactSession() error {
+	// Close current session log
+	if g.logFile != nil {
+		g.logFile.Close()
+		g.logFile = nil
+	}
+
+	// Rewrite with only live session-owned symbols
+	path := g.sessionLogPath()
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	var orderedNames []string
+	seen := make(map[string]bool)
+	if len(data) > 0 {
+		entries := splitLogEntries(string(data))
+		for _, entry := range entries {
+			n, err := Parse(entry)
+			if err != nil {
+				continue
+			}
+			if n.Kind != NodeList || len(n.Children) < 3 {
+				continue
+			}
+			if n.Children[0].Kind != NodeSymbol || n.Children[0].Str != "define" {
+				continue
+			}
+			symName := n.Children[1].Str
+			if !seen[symName] {
+				seen[symName] = true
+				orderedNames = append(orderedNames, symName)
+			}
+		}
+	}
+
+	var sb strings.Builder
+	for _, symName := range orderedNames {
+		owner, ownerExists := g.symbolOwner[symName]
+		if !ownerExists || owner != "" {
+			continue // not session-owned
+		}
+		nid, symExists := g.symbols[symName]
+		if !symExists {
+			continue
+		}
+		gn := g.nodes[nid]
+		fmt.Fprintf(&sb, "(define %s %s)\n\n", symName, gn.Source)
+	}
+
+	if err := os.WriteFile(path, []byte(sb.String()), 0644); err != nil {
+		return err
+	}
+
+	// Reopen session log for appending
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	g.logFile = f
+	return nil
+}
+
 func (g *Graph) LibraryOrder() []string {
 	result := make([]string, len(g.libraries))
 	copy(result, g.libraries)

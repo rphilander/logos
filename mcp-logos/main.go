@@ -111,6 +111,34 @@ func handleRefreshAll(ctx context.Context, request mcp.CallToolRequest) (*mcp.Ca
 	return formatResult(resp)
 }
 
+func handlePromote(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, err := request.RequireString("name")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	library, err := request.RequireString("library")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	resp, err := send(map[string]any{"op": "promote", "name": name, "library": library})
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return formatResult(resp)
+}
+
+func handleSource(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, err := request.RequireString("name")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	resp, err := send(map[string]any{"op": "source", "name": name})
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return formatResult(resp)
+}
+
 func handleDelete(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	name, err := request.RequireString("name")
 	if err != nil {
@@ -297,6 +325,32 @@ func main() {
 			),
 		),
 		handleDelete,
+	)
+
+	s.AddTool(
+		mcp.NewTool("logos_promote",
+			mcp.WithDescription("Move a session symbol into a library. Defines it in the target library and compacts the session log."),
+			mcp.WithString("name",
+				mcp.Required(),
+				mcp.Description("Symbol name to promote"),
+			),
+			mcp.WithString("library",
+				mcp.Required(),
+				mcp.Description("Target library name"),
+			),
+		),
+		handlePromote,
+	)
+
+	s.AddTool(
+		mcp.NewTool("logos_source",
+			mcp.WithDescription("Return the original source expression for a named symbol."),
+			mcp.WithString("name",
+				mcp.Required(),
+				mcp.Description("Symbol name to get source for"),
+			),
+		),
+		handleSource,
 	)
 
 	s.AddTool(

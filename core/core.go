@@ -47,8 +47,9 @@ func NewCore(dir, sockPath, modSockPath, cbSockPath string) (*Core, error) {
 	os.Remove(cbSockPath)
 
 	c := &Core{
-		requests:  make(chan coreRequest, 64),
-		maxTraces: 1000,
+		requests:    make(chan coreRequest, 64),
+		maxTraces:   1000,
+		defaultFuel: 500000,
 	}
 
 	// Build builtins: data primitives + module interaction
@@ -208,6 +209,10 @@ func (c *Core) handleRequest(msg map[string]any) map[string]any {
 		resp = c.handleSetFuel(id, msg)
 	case "get-fuel":
 		resp = c.handleGetFuel(id, msg)
+	case "source":
+		resp = c.handleSource(id, msg)
+	case "promote":
+		resp = c.handlePromote(id, msg)
 	default:
 		resp = errorResponse(id, fmt.Sprintf("unknown op: %s", op))
 	}
@@ -521,6 +526,39 @@ func (c *Core) handleSetFuel(id string, msg map[string]any) map[string]any {
 
 func (c *Core) handleGetFuel(id string, msg map[string]any) map[string]any {
 	return map[string]any{"id": id, "ok": true, "value": c.defaultFuel}
+}
+
+func (c *Core) handleSource(id string, msg map[string]any) map[string]any {
+	name, ok := msg["name"].(string)
+	if !ok {
+		return errorResponse(id, "source: missing 'name' string")
+	}
+	nodeID, ok := c.graph.symbols[name]
+	if !ok {
+		return errorResponse(id, fmt.Sprintf("source: unknown symbol: %s", name))
+	}
+	node := c.graph.nodes[nodeID]
+	return map[string]any{"id": id, "ok": true, "value": node.Source}
+}
+
+func (c *Core) handlePromote(id string, msg map[string]any) map[string]any {
+	name, ok := msg["name"].(string)
+	if !ok {
+		return errorResponse(id, "promote: missing 'name' string")
+	}
+	lib, ok := msg["library"].(string)
+	if !ok {
+		return errorResponse(id, "promote: missing 'library' string")
+	}
+	node, err := c.graph.Promote(name, lib)
+	if err != nil {
+		return errorResponse(id, err.Error())
+	}
+	return map[string]any{
+		"id":    id,
+		"ok":    true,
+		"value": map[string]any{"node_id": node.ID, "name": name, "library": lib},
+	}
 }
 
 func errorResponse(id, errMsg string) map[string]any {
