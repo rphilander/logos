@@ -7,6 +7,7 @@ mod-http-server/mod-http-server
 mod-sqlite/mod-sqlite
 mod-mcp-server/mod-mcp-server
 mod-fs/mod-fs
+mod-git/mod-git
 
 # Session log (ephemeral)
 data/log.logos

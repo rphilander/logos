@@ -4,3 +4,4 @@ mod-http: sleep 1 && LOGOS_CB_SOCK=/tmp/logos-cb.sock LOGOS_MOD_SOCK=/tmp/logos-
 mod-sqlite: sleep 1 && LOGOS_CB_SOCK=/tmp/logos-cb.sock LOGOS_MOD_SOCK=/tmp/logos-mod.sock ./mod-sqlite/mod-sqlite
 mod-mcp-server: sleep 1 && LOGOS_CB_SOCK=/tmp/logos-cb.sock LOGOS_MOD_SOCK=/tmp/logos-mod.sock ./mod-mcp-server/mod-mcp-server
 mod-fs: sleep 1 && LOGOS_PROJECT_ROOT=. LOGOS_MOD_SOCK=/tmp/logos-mod.sock ./mod-fs/mod-fs
+mod-git: sleep 1 && LOGOS_PROJECT_ROOT=. LOGOS_MOD_SOCK=/tmp/logos-mod.sock ./mod-git/mod-git
