@@ -2,12 +2,12 @@ BINS = core/logos core/cmd/logos-cli/logos-cli \
        mcp-logos/mcp-logos \
        mod-time/mod-time mod-http-server/mod-http-server \
        mod-sqlite/mod-sqlite mod-mcp-server/mod-mcp-server \
-       mod-fs/mod-fs mod-git/mod-git
+       mod-fs/mod-fs mod-git/mod-git mod-go/mod-go
 
 all: fmt test $(BINS)
 
 fmt:
-	gofmt -w core/ mcp-logos/ mod-time/ mod-http-server/ mod-sqlite/ mod-mcp-server/ mod-fs/ mod-git/
+	gofmt -w core/ mcp-logos/ mod-time/ mod-http-server/ mod-sqlite/ mod-mcp-server/ mod-fs/ mod-git/ mod-go/
 
 test:
 	cd core && go test ./...
@@ -39,6 +39,9 @@ mod-fs/mod-fs: mod-fs/*.go
 
 mod-git/mod-git: mod-git/*.go
 	cd mod-git && go build -o mod-git .
+
+mod-go/mod-go: mod-go/*.go
+	cd mod-go && go build -o mod-go .
 
 clean:
 	rm -f $(BINS)
