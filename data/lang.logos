@@ -12,7 +12,7 @@
 
 (define lang-search-in (fn (query depth root) (loop ((stack (list (list root "" "" (list)))) (acc (list))) (if (empty? stack) acc (let (entry (head stack) rest-stack (rest stack) node (head entry) path (nth entry 1) parent-name (nth entry 2) sibling-symbols (nth entry 3) name (get node "name") current-path (if (eq path "") name (concat path " > " name)) is-match (lang-search-matches? node query) own-result (if is-match (list (lang-search-result node current-path depth parent-name sibling-symbols)) (list)) members (get node "members") concepts (get node "concepts") all-children (append (if (nil? members) (list) members) (if (nil? concepts) (list) concepts)) child-symbols (map (fn (c) (get c "symbol")) all-children) child-entries (map (fn (child) (list child current-path name child-symbols)) all-children)) (recur (append child-entries rest-stack) (append acc own-result)))))))
 
-(define lang (dict :symbol "lang" :name "Logos Language Reference" :description "Self-validating language reference for the logos programming environment." :members (list lang-types lang-forms lang-builtins)))
+(define lang (dict :symbol "lang" :name "Logos Language Reference" :description "Self-validating language reference for the logos programming environment." :members (list lang-syntax lang-types lang-forms lang-builtins lang-concepts)))
 
 (define lang-search (fn (query & opts) (let (depth (if (empty? opts) 1 (head opts)) roots (if (le (len opts) 1) (list lang) (nth opts 1))) (fold (fn (acc root) (append acc (lang-search-in query depth root))) (list) roots))))
 
@@ -611,4 +611,114 @@
 (define lang-builtins-step (dict :symbol "lang-builtins-step" :name "Step Debugger" :description "Builtins for controlled, step-by-step evaluation. step-eval creates an evaluator state from an expression string, step-continue advances it one step. Together they enable programmatic evaluation (used by lang-run-test for validation) and interactive debugging (the debug library builds step-n, step-until, step-watch, and run-to-end on top of these primitives)." :keywords (list "debugger" "step" "controlled eval" "single step" "interactive" "programmatic eval") :members (list lang-builtin-step-eval lang-builtin-step-continue)))
 
 (define lang-builtins (dict :symbol "lang-builtins" :name "Builtins" :description "The 35 builtins are Go-implemented functions exposed to logos. Unlike core forms (which control evaluation), builtins receive already-evaluated arguments. They are first-class values — passable to map, fold, apply, and storable in data structures. Grouped into 12 categories: Data (12), Arithmetic (5), Comparison (2), List (3), Map (2), String (1), JSON (2), Type (1), Graph (3), Indirection (2), Trace (2), and Step Debugger (2)." :keywords (list "builtins" "native" "primitive" "Go functions" "first-class" "eager" "operations" "standard library") :members (list lang-builtins-data lang-builtins-arithmetic lang-builtins-comparison lang-builtins-list lang-builtins-map lang-builtins-string lang-builtins-json lang-builtins-type lang-builtins-graph lang-builtins-indirection lang-builtins-trace lang-builtins-step)))
+
+(define lang-ex-sexpr-call (dict :name "lists are function calls" :expr "(eq (add 1 2) 3)"))
+
+(define lang-ex-sexpr-nesting (dict :name "nested expressions" :expr "(eq (add 1 (mul 2 3)) 7)"))
+
+(define lang-test-sexpr-deep-nesting (dict :name "arbitrary nesting depth" :expr "(eq (add (sub (mul 2 3) 1) (div 10 2)) 10)"))
+
+(define lang-test-sexpr-empty-args (dict :name "calls with no arguments" :expr "(eq (list) (list))"))
+
+(define lang-syntax-sexpr (dict :symbol "lang-syntax-sexpr" :name "S-expressions" :description "All code is written as S-expressions: parenthesized lists in prefix notation. (op arg1 arg2 ...). The first element is the operator (a function, builtin, or form), the rest are arguments. Expressions can be nested to any depth — inner expressions are evaluated first and their results become arguments to the outer expression. Atoms (numbers, strings, keywords, booleans, nil) stand alone without parentheses." :keywords (list "s-expression" "syntax" "prefix notation" "parentheses" "nesting" "call" "lisp" "expression") :examples (list lang-ex-sexpr-call lang-ex-sexpr-nesting) :tests (list lang-test-sexpr-deep-nesting lang-test-sexpr-empty-args)))
+
+(define lang-ex-atoms-numbers (dict :name "numeric literals" :expr "(and (eq (type 42) :int) (eq (type 3.14) :float))"))
+
+(define lang-ex-atoms-negative (dict :name "negative number literals" :expr "(and (eq -5 (sub 0 5)) (eq (type -3.14) :float))"))
+
+(define lang-test-atoms-bool-nil (dict :name "boolean and nil literals" :expr "(and (eq (type true) :bool) (and (eq (type false) :bool) (eq (type nil) :nil)))"))
+
+(define lang-syntax-atoms (dict :symbol "lang-syntax-atoms" :name "Atoms" :description "Self-evaluating literals that need no parentheses. Integers: 42, 0, -3. Floats: 3.14, -0.5 (must have a decimal point). Booleans: true, false. Nil: nil. These are parsed directly into their corresponding value types and evaluate to themselves." :keywords (list "literal" "atom" "number" "integer" "float" "boolean" "nil" "self-evaluating" "primitive") :examples (list lang-ex-atoms-numbers lang-ex-atoms-negative) :tests (list lang-test-atoms-bool-nil)))
+
+(define lang-ex-strings-basic (dict :name "double-quoted string literals" :expr "(eq (type \"hello world\") :string)"))
+
+(define lang-ex-strings-escapes (dict :name "escape sequences in strings" :expr "(eq (len (split \"line1\\nline2\" \"\\n\")) 2)"))
+
+(define lang-test-strings-escaped-quote (dict :name "escaped double quotes inside strings" :expr "(contains? \"she said \\\"hi\\\"\" \"hi\")"))
+
+(define lang-test-strings-empty (dict :name "empty string literal" :expr "(eq \"\" \"\")"))
+
+(define lang-syntax-strings (dict :symbol "lang-syntax-strings" :name "Strings" :description "String literals are enclosed in double quotes. Escape sequences: \\n (newline), \\t (tab), \\\" (literal double quote), \\\\ (literal backslash). Empty strings are valid: \"\". Strings are self-evaluating atoms — they need no special form to create. There is no single-quote string syntax and no string interpolation." :keywords (list "string" "double quotes" "escape" "newline" "tab" "backslash" "literal" "text") :examples (list lang-ex-strings-basic lang-ex-strings-escapes) :tests (list lang-test-strings-escaped-quote lang-test-strings-empty)))
+
+(define lang-ex-keywords-syntax (dict :name "colon-prefixed keyword literals" :expr "(and (eq (type :foo) :keyword) (eq (type :hello-world) :keyword))"))
+
+(define lang-ex-keywords-map-keys (dict :name "keywords as map keys" :expr "(eq (get (dict :name \"alice\" :age 30) :name) \"alice\")"))
+
+(define lang-test-keywords-self-eval (dict :name "keywords are self-evaluating" :expr "(eq :foo :foo)"))
+
+(define lang-test-keywords-string-equiv (dict :name "keywords and strings are equivalent as map keys" :expr "(eq (get (dict :a 1) \"a\") 1)"))
+
+(define lang-syntax-keywords (dict :symbol "lang-syntax-keywords" :name "Keywords" :description "Keywords start with a colon: :foo, :hello-world, :status. They are self-evaluating atoms — they always resolve to themselves. Primary use: map keys and enum-like tags. Keywords and strings are equivalent as map keys internally (maps use string keys; :a and \"a\" are the same key). The type builtin returns type names as keywords (:int, :string, etc.)." :keywords (list "keyword" "colon" "tag" "enum" "map key" "self-evaluating" "atom") :examples (list lang-ex-keywords-syntax lang-ex-keywords-map-keys) :tests (list lang-test-keywords-self-eval lang-test-keywords-string-equiv) :see-also (list (link 'lang-type-keyword) (link 'lang-type-map))))
+
+(define lang-ex-tick-symbol (dict :name "tick creates a symbol value" :expr "(eq (type 'foo) :symbol)"))
+
+(define lang-ex-tick-list (dict :name "tick prevents list evaluation" :expr "(eq '(1 2 3) (list 1 2 3))"))
+
+(define lang-test-tick-expands-to-quote (dict :name "'x is syntactic sugar for (quote x)" :expr "(eq 'hello (quote hello))"))
+
+(define lang-test-tick-in-forms (dict :name "tick used to build AST in forms" :expr "(let (my-if (form (c t f) (list 'if c t f))) (eq (my-if true :yes :no) :yes))"))
+
+(define lang-syntax-quote (dict :symbol "lang-syntax-quote" :name "Quote / tick" :description "The tick ' is a reader macro that expands to the quote form: 'x becomes (quote x). Applied to a name, it creates a symbol value instead of resolving it as a graph reference. Applied to a list, it returns the list as data without evaluating it as a function call. Essential for metaprogramming with forms — tick lets you construct AST fragments (like 'if, 'let) that the form expander returns for evaluation." :keywords (list "quote" "tick" "reader macro" "symbol" "unevaluated" "data" "AST" "metaprogramming" "prevent evaluation") :examples (list lang-ex-tick-symbol lang-ex-tick-list) :tests (list lang-test-tick-expands-to-quote lang-test-tick-in-forms) :see-also (list (link 'lang-form-quote) (link 'lang-type-symbol))))
+
+(define lang-ex-rest-params-fn (dict :name "& collects remaining args in fn" :expr "(eq ((fn (a & rest) rest) 1 2 3 4) (list 2 3 4))"))
+
+(define lang-ex-rest-params-form (dict :name "& works in forms too" :expr "(let (my-list (form (& args) (cons 'list args))) (eq (my-list 1 2 3) (list 1 2 3)))"))
+
+(define lang-test-rest-params-empty (dict :name "rest is empty list when no extra args" :expr "(eq ((fn (a & rest) rest) 1) (list))"))
+
+(define lang-test-rest-params-positional (dict :name "positional params bind before rest" :expr "(eq ((fn (a b & rest) (list a b rest)) 1 2 3 4) (list 1 2 (list 3 4)))"))
+
+(define lang-syntax-rest-params (dict :symbol "lang-syntax-rest-params" :name "Rest params" :description "The & symbol in a parameter list collects remaining arguments into a list. (fn (a b & rest) body) — a and b bind positionally, rest gets a list of everything else. If no extra arguments are passed, rest is an empty list. Works in both fn and form. The & must appear before the last parameter name. There can be only one rest parameter." :keywords (list "rest" "variadic" "ampersand" "spread" "variable arguments" "collect" "parameter list") :examples (list lang-ex-rest-params-fn lang-ex-rest-params-form) :tests (list lang-test-rest-params-empty lang-test-rest-params-positional) :see-also (list (link 'lang-form-fn) (link 'lang-form-form))))
+
+(define lang-ex-comments-semicolon (dict :name "semicolon comments are ignored" :expr "(eq 42 42)"))
+
+(define lang-syntax-comments (dict :symbol "lang-syntax-comments" :name "Comments" :description "Semicolons start line comments. Everything from ; to end of line is ignored by the parser. Comments appear in library log files (data/*.logos) for documentation. There are no block comments." :keywords (list "comment" "semicolon" "line comment" "documentation" "ignore") :examples (list lang-ex-comments-semicolon)))
+
+(define lang-syntax (dict :symbol "lang-syntax" :name "Syntax" :description "The surface syntax of logos. Code is written as S-expressions — parenthesized prefix notation. Six kinds of atoms (numbers, floats, booleans, nil, strings, keywords) are self-evaluating. The tick reader macro ' prevents evaluation (creating symbols or data lists). The & sigil in parameter lists enables variadic functions. Semicolons start line comments." :keywords (list "syntax" "grammar" "parsing" "surface form" "notation" "lexical") :members (list lang-syntax-sexpr lang-syntax-atoms lang-syntax-strings lang-syntax-keywords lang-syntax-quote lang-syntax-rest-params lang-syntax-comments)))
+
+(define lang-ex-closure-capture (dict :name "fn captures enclosing scope" :expr "(let (x 10) (let (f (fn () x)) (eq (f) 10)))"))
+
+(define lang-ex-closure-factory (dict :name "closures as function factories" :expr "(let (make-adder (fn (n) (fn (x) (add n x))) add5 (make-adder 5)) (eq (add5 3) 8))"))
+
+(define lang-test-closure-snapshot (dict :name "closure captures value at creation time" :expr "(let (x 1 f (fn () x)) (let (x 2) (eq (f) 1)))"))
+
+(define lang-test-closure-nested (dict :name "nested closures see outer scopes" :expr "(let (a 1) (let (b 2) (let (f (fn () (add a b))) (eq (f) 3))))"))
+
+(define lang-concept-closures (dict :symbol "lang-concept-closures" :name "Closures" :description "Functions capture their lexical scope at creation time. When fn is evaluated, a snapshot of all local bindings visible at that point is stored with the function value. When the function is later called, those captured bindings are restored. This means closures are frozen snapshots — they see the values that existed when they were created, not later changes. Closures enable function factories, partial application, and data hiding." :keywords (list "closure" "lexical scope" "capture" "snapshot" "environment" "enclosing scope" "function factory") :examples (list lang-ex-closure-capture lang-ex-closure-factory) :tests (list lang-test-closure-snapshot lang-test-closure-nested) :see-also (list (link 'lang-form-fn) (link 'lang-form-let))))
+
+(define lang-ex-resolve-at-define (dict :name "symbols resolve to node-refs at define time" :expr "(eq (type (get (symbols) \"not\")) :node-ref)"))
+
+(define lang-ex-resolve-builtins (dict :name "builtins resolve to builtin values" :expr "(eq (type add) :builtin)"))
+
+(define lang-test-resolve-no-forward-ref (dict :name "graph symbols must exist before use" :expr "(eq (type not) :fn)"))
+
+(define lang-concept-define-time (dict :symbol "lang-concept-define-time" :name "Define-time resolution" :description "All symbols are resolved when a definition is processed, not when the resulting value is evaluated. The graph's resolveAST pass converts symbol names to concrete references: graph-defined symbols become node-refs, builtins become builtin values. If a symbol is not defined at define time, the definition fails with an error. This means no forward references — a function can only call symbols that already exist. The evaluator never consults the symbol table; it works entirely with pre-resolved references. This eliminates a class of runtime errors and makes dependencies explicit in the graph." :keywords (list "resolution" "define time" "eager resolution" "symbol lookup" "forward reference" "node-ref" "dependency" "graph") :examples (list lang-ex-resolve-at-define lang-ex-resolve-builtins) :tests (list lang-test-resolve-no-forward-ref) :see-also (list (link 'lang-type-node-ref) (link 'lang-builtin-symbols))))
+
+(define lang-ex-iteration-sum (dict :name "loop/recur for iteration" :expr "(eq (loop ((xs (list 1 2 3 4 5)) (acc 0)) (if (empty? xs) acc (recur (rest xs) (add acc (head xs))))) 15)"))
+
+(define lang-ex-iteration-collect (dict :name "building a result list with loop" :expr "(eq (loop ((xs (list 1 2 3)) (acc (list))) (if (empty? xs) acc (recur (rest xs) (append acc (list (mul (head xs) 2)))))) (list 2 4 6))"))
+
+(define lang-test-iteration-no-recursion (dict :name "loop replaces recursion — functions cannot self-call" :expr "(eq (loop ((n 10) (acc 1)) (if (le n 1) acc (recur (sub n 1) (mul acc n)))) 3628800)"))
+
+(define lang-test-iteration-nested-bindings (dict :name "loop bindings use nested pair syntax" :expr "(eq (loop ((i 0) (s \"\")) (if (eq i 3) s (recur (add i 1) (concat s \"x\")))) \"xxx\")"))
+
+(define lang-concept-iteration (dict :symbol "lang-concept-iteration" :name "Iteration" :description "Logos has no recursion — functions cannot call themselves and there are no forward references. All iteration uses loop/recur. loop establishes named bindings with initial values; recur jumps back to the enclosing loop with new binding values. This is the sole iteration mechanism. It replaces recursive patterns (map over a list, accumulate a sum, traverse a tree) with explicit state threading. loop bindings use nested pair syntax: ((name1 init1) (name2 init2)), unlike let which uses flat syntax: (name1 init1 name2 init2)." :keywords (list "iteration" "loop" "recur" "no recursion" "tail call" "accumulator" "state threading" "repeat") :examples (list lang-ex-iteration-sum lang-ex-iteration-collect) :tests (list lang-test-iteration-no-recursion lang-test-iteration-nested-bindings) :see-also (list (link 'lang-form-loop) (link 'lang-form-recur))))
+
+(define lang-ex-indirection-cross-ref (dict :name "links as cross-references" :expr "(let (see-also (list (link 'lang-type-int) (link 'lang-type-float))) (eq (get (follow (head see-also)) :name) \"Integer\"))"))
+
+(define lang-ex-indirection-no-dependency (dict :name "links create no graph dependency" :expr "(eq (type (link 'nonexistent-symbol)) :link)"))
+
+(define lang-test-indirection-late-binding (dict :name "follow always gets the current definition" :expr "(let (lnk (link 'inc)) (eq ((follow lnk) 5) 6))"))
+
+(define lang-concept-indirection (dict :symbol "lang-concept-indirection" :name "Indirection" :description "Direct graph references (used in members, examples, tests) are resolved at define time and tracked by the dependency graph. Links are the alternative: (link 'name) creates an inert pointer that stores a symbol name without resolving it. The symbol need not exist. follow dereferences a link at call time, always getting the current definition. Use direct refs for structural relationships (parent→child) where you want refresh-all propagation. Use links for cross-references (see-also) where ordering constraints or cycles would be problematic." :keywords (list "indirection" "link" "follow" "direct reference" "cross-reference" "late binding" "graph dependency" "cycle-free") :examples (list lang-ex-indirection-cross-ref lang-ex-indirection-no-dependency) :tests (list lang-test-indirection-late-binding) :see-also (list (link 'lang-builtin-link) (link 'lang-builtin-follow) (link 'lang-type-link))))
+
+(define lang-ex-graph-node-refs (dict :name "definitions become graph nodes" :expr "(eq (type (get (symbols) \"map\")) :node-ref)"))
+
+(define lang-ex-graph-dependencies (dict :name "ref-by reveals dependency relationships" :expr "(gt (len (ref-by \"not\")) 0)"))
+
+(define lang-test-graph-immutable-nodes (dict :name "redefining creates a new node, old is superseded" :expr "(eq (type (get (symbols) \"not\")) :node-ref)"))
+
+(define lang-concept-graph (dict :symbol "lang-concept-graph" :name "Graph" :description "Every definition becomes a node in a dependency-tracked graph. Nodes are immutable — redefining a symbol creates a new node and supersedes the old one. The graph tracks which nodes reference which: ref-by shows reverse dependencies, and refresh-all re-resolves dependents when a symbol changes. After redefining a node, its dependents hold stale references until refreshed. This makes change propagation explicit rather than automatic. The graph is the foundation: it enables introspection (node-expr, symbols), impact analysis (ref-by, dependents), and the library persistence system." :keywords (list "graph" "dependency" "node" "immutable" "refresh" "stale" "propagation" "supersede" "redefine") :examples (list lang-ex-graph-node-refs lang-ex-graph-dependencies) :tests (list lang-test-graph-immutable-nodes) :see-also (list (link 'lang-builtin-symbols) (link 'lang-builtin-ref-by) (link 'lang-builtin-node-expr))))
+
+(define lang-concepts (dict :symbol "lang-concepts" :name "Concepts" :description "Key concepts that cut across syntax, types, forms, and builtins. How functions capture scope (closures), how symbols become references (define-time resolution), how to iterate without recursion (loop/recur), how cross-references work without cycles (link/follow indirection), and how the dependency graph tracks and propagates changes." :keywords (list "concepts" "design" "semantics" "how it works" "mental model") :members (list lang-concept-closures lang-concept-define-time lang-concept-iteration lang-concept-indirection lang-concept-graph)))
 
