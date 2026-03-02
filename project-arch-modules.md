@@ -4,9 +4,9 @@
 
 Build Go AST introspection, filesystem, and git modules, then create an architecture documentation library (`arch`) that cross-references the language library (`lang`) through a shared documentation framework (`docs`).
 
-## Phase 1: Three New Modules
+## Phase 1: Three New Modules ✓ COMPLETE
 
-Build mod-go, mod-fs, and mod-git. All follow the standard module protocol (unix domain socket, 4-byte length prefix + JSON). Use `mod-time/main.go` as boilerplate template. Add each to `Procfile` and `Makefile`.
+Built mod-go, mod-fs, and mod-git. All follow the standard module protocol (unix domain socket, 4-byte length prefix + JSON). Added to `Procfile`, `Makefile`, and `.gitignore`. All smoke-tested via logos `send`.
 
 ### mod-go — Go AST introspection
 
