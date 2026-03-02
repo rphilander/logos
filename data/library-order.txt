@@ -3,4 +3,3 @@ debug
 web
 db
 lang
-lang-ui

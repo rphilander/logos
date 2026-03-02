@@ -1,3 +1,21 @@
+(define lang-run-test (fn (test-node) (let (expr-str (get test-node "expr") name (get test-node "name") state (run-to-end (step-eval expr-str)) status (get state :status)) (if (eq status :done) (let (result (get state :result)) (dict "name" name "pass" (eq result true) "expr" expr-str)) (dict "name" name "pass" false "expr" expr-str "error" (get state :error))))))
+
+(define lang-collect-tests (fn (node) (loop ((stack (list node)) (acc (list))) (if (empty? stack) acc (let (cur (head stack) rest-stack (rest stack) examples (get cur "examples") tests (get cur "tests") members (get cur "members") concepts (get cur "concepts") own (append (if (nil? examples) (list) examples) (if (nil? tests) (list) tests)) children (append (if (nil? members) (list) members) (if (nil? concepts) (list) concepts))) (recur (append children rest-stack) (append acc own)))))))
+
+(define lang-validate (fn (node) (let (tests (lang-collect-tests node) results (map lang-run-test tests) passed (filter (fn (r) (get r "pass")) results) failed (filter (fn (r) (not (get r "pass"))) results)) (dict "total" (len results) "passed" (len passed) "failed" (len failed) "failures" failed))))
+
+(define lang-describe (fn (node & opts) (let (depth (if (empty? opts) :brief (head opts))) (loop ((stack (list (list node 0))) (acc "")) (if (empty? stack) acc (let (entry (head stack) rest-stack (rest stack) cur (head entry) level (nth entry 1) name (get cur "name") desc (get cur "description") examples (get cur "examples") members (get cur "members") concepts (get cur "concepts") prefix (if (eq level 0) "## " (if (eq level 1) "### " "#### ")) header (concat prefix name "\n\n" desc "\n") example-section (if (nil? examples) "" (concat "\n" prefix "Examples\n" (join "\n" (map (fn (ex) (concat "- **" (get ex "name") "**: `" (get ex "expr") "`")) examples)) "\n")) child-section (if (eq depth :brief) (let (member-brief (if (nil? members) "" (concat "\n" prefix "Members\n" (join "\n" (map (fn (m) (concat "- **" (get m "name") "**: " (get m "description"))) members)) "\n")) concept-brief (if (nil? concepts) "" (concat "\n" prefix "Concepts\n" (join "\n" (map (fn (c) (concat "- **" (get c "name") "**: " (get c "description"))) concepts)) "\n"))) (concat member-brief concept-brief)) "") new-stack (if (eq depth :brief) rest-stack (let (children (append (if (nil? members) (list) members) (if (nil? concepts) (list) concepts)) child-entries (map (fn (c) (list c (add level 1))) children)) (append child-entries rest-stack)))) (recur new-stack (concat acc header example-section child-section "\n"))))))))
+
+(define lang-search-matches? (fn (node query) (let (name (get node "name") desc (get node "description") kws (get node "keywords") in-name (if (nil? name) false (contains? name query)) in-desc (if (nil? desc) false (contains? desc query)) in-kws (if (nil? kws) false (fold (fn (acc kw) (or acc (contains? kw query))) false kws))) (or in-name (or in-desc in-kws)))))
+
+(define lang-search-result (fn (node path depth parent-name sibling-symbols) (let (base (dict "name" (get node "name") "symbol" (get node "symbol") "path" path) r1 (if (ge depth 1) (put base "description" (get node "description")) base) r2 (if (ge depth 2) (let (examples (get node "examples")) (if (nil? examples) (put r1 "examples" (list)) (put r1 "examples" (map (fn (e) (dict "name" (get e "name") "expr" (get e "expr"))) examples)))) r1) r3 (if (ge depth 3) (put (put r2 "parent" parent-name) "siblings" sibling-symbols) r2)) r3)))
+
+(define lang-search-in (fn (query depth root) (loop ((stack (list (list root "" "" (list)))) (acc (list))) (if (empty? stack) acc (let (entry (head stack) rest-stack (rest stack) node (head entry) path (nth entry 1) parent-name (nth entry 2) sibling-symbols (nth entry 3) name (get node "name") current-path (if (eq path "") name (concat path " > " name)) is-match (lang-search-matches? node query) own-result (if is-match (list (lang-search-result node current-path depth parent-name sibling-symbols)) (list)) members (get node "members") concepts (get node "concepts") all-children (append (if (nil? members) (list) members) (if (nil? concepts) (list) concepts)) child-symbols (map (fn (c) (get c "symbol")) all-children) child-entries (map (fn (child) (list child current-path name child-symbols)) all-children)) (recur (append child-entries rest-stack) (append acc own-result)))))))
+
+(define lang (dict :symbol "lang" :name "Logos Language Reference" :description "Self-validating language reference for the logos programming environment." :members (list lang-types lang-forms lang-builtins)))
+
+(define lang-search (fn (query & opts) (let (depth (if (empty? opts) 1 (head opts)) roots (if (le (len opts) 1) (list lang) (nth opts 1))) (fold (fn (acc root) (append acc (lang-search-in query depth root))) (list) roots))))
+
 (define lang-ex-int-literal (dict "name" "integer literals" "expr" "(eq (type 42) :int)"))
 
 (define lang-ex-int-arithmetic (dict "name" "integer arithmetic" "expr" "(eq (add 2 3) 5)"))
@@ -52,7 +70,7 @@
 
 (define lang-test-keyword-distinct-from-string (dict "name" "keyword is not a string" "expr" "(not (eq :foo \"foo\"))"))
 
-(define lang-type-keyword (dict "symbol" "lang-type-keyword" "name" "Keyword" "description" "Self-evaluating identifiers prefixed with colon: :foo, :status, :int. Commonly used as map keys and as enum-like tags. Keywords are distinct from strings — :foo does not equal \"foo\". The type builtin returns keywords to identify types: :int, :float, :string, :keyword, :bool, :nil, :list, :map, :fn, :form, :builtin." "keywords" (list "tag" "enum" "colon prefix" "self-evaluating" "type tag" "label") "examples" (list lang-ex-keyword-literal lang-ex-keyword-equality) "tests" (list lang-test-keyword-as-map-key lang-test-keyword-distinct-from-string)))
+(define lang-type-keyword (dict "symbol" "lang-type-keyword" "name" "Keyword" "description" "Self-evaluating identifiers prefixed with colon: :foo, :status, :int. Commonly used as map keys and as enum-like tags. Keywords are distinct from strings — :foo does not equal \"foo\". The type builtin returns keywords to identify types: :int, :float, :string, :keyword, :bool, :nil, :list, :map, :fn, :form, :builtin, :link." "keywords" (list "tag" "enum" "colon prefix" "self-evaluating" "type tag" "label") "examples" (list lang-ex-keyword-literal lang-ex-keyword-equality) "tests" (list lang-test-keyword-as-map-key lang-test-keyword-distinct-from-string)))
 
 (define lang-ex-symbol-quote (dict "name" "creating symbols with quote" "expr" "(eq (type 'foo) :symbol)"))
 
@@ -70,7 +88,7 @@
 
 (define lang-test-noderef-node-expr (dict "name" "node-expr works on node-refs" "expr" "(list? (node-expr (get (symbols) \"fold\")))"))
 
-(define lang-type-node-ref (dict "symbol" "lang-type-node-ref" "name" "Node Reference" "description" "A reference to a specific immutable node in the graph. Node-refs are system-generated — there is no syntax to create them directly. They are produced by graph builtins like symbols (which returns a map of name to node-ref) and appear inside ASTs returned by node-expr. Graph builtins accept both symbols and node-refs interchangeably; a symbol resolves to its current node-ref." "keywords" (list "node reference" "graph node" "pointer" "immutable node" "system-generated") "examples" (list lang-ex-noderef-from-symbols lang-ex-noderef-system-only) "tests" (list lang-test-noderef-node-expr)))
+(define lang-type-node-ref (dict "symbol" "lang-type-node-ref" "name" "Node Reference" "description" "A reference to a specific immutable node in the graph. Node-refs are system-generated — there is no syntax to create them directly. They are produced by graph builtins like symbols (which returns a map of name to node-ref) and appear inside ASTs returned by node-expr. All symbols are resolved to node-refs at define time — the evaluator works exclusively with node-refs, never symbol names." "keywords" (list "node reference" "graph node" "pointer" "immutable node" "system-generated" "define-time resolution") "examples" (list lang-ex-noderef-from-symbols lang-ex-noderef-system-only) "tests" (list lang-test-noderef-node-expr)))
 
 (define lang-ex-nil-literal (dict "name" "nil literal" "expr" "(eq (type nil) :nil)"))
 
@@ -124,7 +142,7 @@
 
 (define lang-test-fn-higher-order (dict "name" "functions as arguments" "expr" "(eq (map (fn (x) (mul x 2)) (list 1 2 3)) (list 2 4 6))"))
 
-(define lang-type-fn (dict "symbol" "lang-type-fn" "name" "Function" "description" "Created with fn: (fn (params) body). Functions are first-class values — they can be passed as arguments, returned from other functions, and stored in data structures. Functions close over their lexical scope at creation time (closures). Rest parameters with & collect remaining arguments into a list: (fn (a & rest) body). Named functions are created by defining an fn expression: (define double (fn (x) (mul x 2))). Recursion works naturally — unresolved symbols in function bodies resolve via the graph at eval time. Tail calls are optimized (TCO)." "keywords" (list "function" "lambda" "closure" "callable" "procedure" "anonymous function" "first-class") "examples" (list lang-ex-fn-lambda lang-ex-fn-closure lang-ex-fn-rest-params) "tests" (list lang-test-fn-type lang-test-fn-higher-order)))
+(define lang-type-fn (dict "symbol" "lang-type-fn" "name" "Function" "description" "Created with fn: (fn (params) body). Functions are first-class values — they can be passed as arguments, returned from other functions, and stored in data structures. Functions close over their lexical scope at creation time (closures). Rest parameters with & collect remaining arguments into a list: (fn (a & rest) body). Named functions are created by defining an fn expression: (define double (fn (x) (mul x 2))). Functions cannot call themselves — use loop/recur for iteration." "keywords" (list "function" "lambda" "closure" "callable" "procedure" "anonymous function" "first-class") "examples" (list lang-ex-fn-lambda lang-ex-fn-closure lang-ex-fn-rest-params) "tests" (list lang-test-fn-type lang-test-fn-higher-order)))
 
 (define lang-ex-form-basic (dict "name" "form receives unevaluated AST" "expr" "(let (my-when (form (test body) (list 'if test body nil))) (eq (my-when true :yes) :yes))"))
 
@@ -142,7 +160,15 @@
 
 (define lang-test-builtin-apply (dict "name" "apply works on builtins" "expr" "(eq (apply add (list 3 4)) 7)"))
 
-(define lang-type-builtin (dict "symbol" "lang-type-builtin" "name" "Builtin" "description" "Go-implemented functions exposed to logos. Builtins are first-class values — they can be stored in variables, passed as arguments to higher-order functions like map and fold, and called with apply. There are 31 builtins covering data operations, arithmetic, comparison, list/map manipulation, string operations, JSON, type checking, graph introspection, tracing, and step debugging." "keywords" (list "native" "primitive" "go function" "built-in" "system function" "intrinsic") "examples" (list lang-ex-builtin-first-class lang-ex-builtin-passable) "tests" (list lang-test-builtin-apply)))
+(define lang-type-builtin (dict "symbol" "lang-type-builtin" "name" "Builtin" "description" "Go-implemented functions exposed to logos. Builtins are first-class values — they can be stored in variables, passed as arguments to higher-order functions like map and fold, and called with apply. Builtins cover data operations, arithmetic, comparison, list/map manipulation, string operations, JSON, type checking, graph introspection, indirection (link/follow), tracing, and step debugging." "keywords" (list "native" "primitive" "go function" "built-in" "system function" "intrinsic") "examples" (list lang-ex-builtin-first-class lang-ex-builtin-passable) "tests" (list lang-test-builtin-apply)))
+
+(define lang-ex-link-create (dict "name" "create a link from a symbol" "expr" "(eq (type (link 'fold)) :link)"))
+
+(define lang-ex-link-follow (dict "name" "follow dereferences a link" "expr" "(eq (type (follow (link 'fold))) :fn)"))
+
+(define lang-test-link-roundtrip (dict "name" "link + follow retrieves current value" "expr" "(eq (type (follow (link 'fold))) :fn)"))
+
+(define lang-type-link (dict "symbol" "lang-type-link" "name" "Link" "description" "Explicit symbol indirection. Created with (link 'name) — takes a symbol and returns a link value. Dereferenced with (follow lnk) — evaluates the current definition of the named symbol. Links provide dynamic symbol lookup for cases where you need to access a symbol's current value rather than the value frozen at define time. Useful for building tools that work with the graph as data." "keywords" (list "indirection" "dynamic lookup" "dereference" "symbol reference" "late binding" "follow") "examples" (list lang-ex-link-create lang-ex-link-follow) "tests" (list lang-test-link-roundtrip)))
 
 (define lang-ex-truthy-values (dict "name" "non-nil non-false values are truthy" "expr" "(and (if 0 true false) (and (if \"\" true false) (and (if (list) true false) (if :x true false))))"))
 
@@ -164,51 +190,31 @@
 
 (define lang-concept-equality (dict "symbol" "lang-concept-equality" "name" "Equality" "description" "eq tests structural equality. For primitives (int, float, bool, string, keyword, nil), it compares values. For collections (list, map), it compares deeply — two lists are equal if they have the same elements in the same order, two maps are equal if they have the same keys with equal values. Different types are never equal: 1 does not equal 1.0, :foo does not equal \"foo\", nil does not equal false." "keywords" (list "equal" "comparison" "deep equality" "same value" "eq") "examples" (list lang-ex-eq-structural lang-ex-eq-cross-type) "tests" (list lang-test-eq-nested)))
 
-(define lang-types (dict "symbol" "lang-types" "name" "Types" "description" "Logos has 13 types. Dynamic typing — values carry their type, variables don't. Strong typing — no implicit coercion between types (except int promotion to float in mixed arithmetic). The type builtin returns a keyword identifying any value's type." "members" (list lang-type-int lang-type-float lang-type-bool lang-type-string lang-type-keyword lang-type-symbol lang-type-node-ref lang-type-nil lang-type-list lang-type-map lang-type-fn lang-type-form lang-type-builtin) "concepts" (list lang-concept-truthy lang-concept-equality)))
-
-(define lang-run-test (fn (test-node) (let (expr-str (get test-node "expr") name (get test-node "name") state (run-to-end (step-eval expr-str)) status (get state :status)) (if (eq status :done) (let (result (get state :result)) (dict "name" name "pass" (eq result true) "expr" expr-str)) (dict "name" name "pass" false "expr" expr-str "error" (get state :error))))))
-
-(define lang-collect-tests (fn (node) (let (examples (get node "examples") tests (get node "tests") members (get node "members") concepts (get node "concepts") own-tests (append (if (nil? examples) (list) examples) (if (nil? tests) (list) tests)) member-tests (if (nil? members) (list) (fold (fn (acc m) (append acc (lang-collect-tests m))) (list) members)) concept-tests (if (nil? concepts) (list) (fold (fn (acc c) (append acc (lang-collect-tests c))) (list) concepts))) (append own-tests (append member-tests concept-tests)))))
-
-(define lang-validate (fn (node) (let (tests (lang-collect-tests node) results (map lang-run-test tests) passed (filter (fn (r) (get r "pass")) results) failed (filter (fn (r) (not (get r "pass"))) results)) (dict "total" (len results) "passed" (len passed) "failed" (len failed) "failures" failed))))
-
-(define lang-describe (fn (node & opts) (let (depth (if (empty? opts) :brief (head opts)) name (get node "name") desc (get node "description") examples (get node "examples") members (get node "members") concepts (get node "concepts") header (concat "## " name "\n\n" desc "\n") example-section (if (nil? examples) "" (concat "\n### Examples\n" (join "\n" (map (fn (ex) (concat "- **" (get ex "name") "**: `" (get ex "expr") "`")) examples)) "\n")) member-section (if (nil? members) "" (if (eq depth :brief) (concat "\n### Members\n" (join "\n" (map (fn (m) (concat "- **" (get m "name") "**: " (get m "description"))) members)) "\n") (concat "\n" (join "\n\n" (map (fn (m) (lang-describe m depth)) members)) "\n"))) concept-section (if (nil? concepts) "" (if (eq depth :brief) (concat "\n### Concepts\n" (join "\n" (map (fn (c) (concat "- **" (get c "name") "**: " (get c "description"))) concepts)) "\n") (concat "\n" (join "\n\n" (map (fn (c) (lang-describe c depth)) concepts)) "\n")))) (concat header example-section member-section concept-section))))
-
-(define lang-search-matches? (fn (node query) (let (name (get node "name") desc (get node "description") kws (get node "keywords") in-name (if (nil? name) false (contains? name query)) in-desc (if (nil? desc) false (contains? desc query)) in-kws (if (nil? kws) false (fold (fn (acc kw) (or acc (contains? kw query))) false kws))) (or in-name (or in-desc in-kws)))))
-
-(define lang-search-result (fn (node path depth parent-name sibling-symbols) (let (base (dict "name" (get node "name") "symbol" (get node "symbol") "path" path) r1 (if (ge depth 1) (put base "description" (get node "description")) base) r2 (if (ge depth 2) (let (examples (get node "examples")) (if (nil? examples) (put r1 "examples" (list)) (put r1 "examples" (map (fn (e) (dict "name" (get e "name") "expr" (get e "expr"))) examples)))) r1) r3 (if (ge depth 3) (put (put r2 "parent" parent-name) "siblings" sibling-symbols) r2)) r3)))
-
-(define lang-search-in (fn (query depth node path parent-name sibling-symbols) (let (name (get node "name") current-path (if (eq path "") name (concat path " > " name)) is-match (lang-search-matches? node query) own-result (if is-match (list (lang-search-result node current-path depth parent-name sibling-symbols)) (list)) members (get node "members") concepts (get node "concepts") all-children (append (if (nil? members) (list) members) (if (nil? concepts) (list) concepts)) child-symbols (map (fn (c) (get c "symbol")) all-children) child-results (fold (fn (acc child) (append acc (lang-search-in query depth child current-path name child-symbols))) (list) all-children)) (append own-result child-results))))
-
-(define lang-search (fn (query & opts) (let (depth (if (empty? opts) 1 (head opts)) roots (if (le (len opts) 1) (list lang) (nth opts 1))) (fold (fn (acc root) (append acc (lang-search-in query depth root "" "" (list)))) (list) roots))))
-
-(define lang (dict "symbol" "lang" "name" "Logos Language Reference" "description" "Self-validating language reference for the logos programming environment." "members" (list lang-types)))
+(define lang-types (dict "symbol" "lang-types" "name" "Types" "description" "Logos has 14 types. Dynamic typing — values carry their type, variables don't. Strong typing — no implicit coercion between types (except int promotion to float in mixed arithmetic). The type builtin returns a keyword identifying any value's type." "members" (list lang-type-int lang-type-float lang-type-bool lang-type-string lang-type-keyword lang-type-symbol lang-type-node-ref lang-type-nil lang-type-list lang-type-map lang-type-fn lang-type-form lang-type-builtin lang-type-link) "concepts" (list lang-concept-truthy lang-concept-equality)))
 
 (define lang-ex-if-basic (dict :name "basic conditional" :expr "(eq (if true :yes :no) :yes)"))
 
-(define lang-ex-if-no-else (dict :name "if without else returns nil" :expr "(eq (if false :yes) nil)"))
+(define lang-ex-if-no-else (dict :name "else branch provides a default" :expr "(eq (if false :yes nil) nil)"))
 
-(define lang-test-if-truthy (dict :name "truthy values take then branch" :expr "(eq (if 42 :yes :no) :yes)"))
+(define lang-test-if-truthy (dict :name "non-nil non-false values are truthy in if" :expr "(eq (if 0 :yes :no) :yes)"))
 
-(define lang-test-if-nested (dict :name "nested if" :expr "(eq (if true (if false :a :b) :c) :b)"))
+(define lang-test-if-nested (dict :name "nested if" :expr "(eq (if false :a (if true :b :c)) :b)"))
 
-(define lang-test-if-nil-falsy (dict :name "nil takes else branch" :expr "(eq (if nil :yes :no) :no)"))
+(define lang-test-if-nil-falsy (dict :name "nil is falsy in if" :expr "(eq (if nil :yes :no) :no)"))
 
-(define lang-ex-let-basic (dict :name "basic let binding" :expr "(eq (let (x 10) (add x 1)) 11)"))
+(define lang-form-if (dict :symbol "lang-form-if" :name "if" :description "Conditional branching. (if test then else). Evaluates test — if truthy, evaluates and returns then; if falsy, evaluates and returns else. All three arguments are required. Non-eager: only the chosen branch is evaluated. Use nil as the else branch when no alternative is needed. See lang-concept-truthy for what counts as truthy/falsy." :keywords (list "conditional" "branch" "ternary" "if-then-else" "guard" "predicate" "control flow") :examples (list lang-ex-if-basic lang-ex-if-no-else) :tests (list lang-test-if-truthy lang-test-if-nested lang-test-if-nil-falsy)))
 
-(define lang-ex-let-nested (dict :name "nested let bindings" :expr "(eq (let (x 1) (let (y 2) (add x y))) 3)"))
+(define lang-ex-let-basic (dict :name "basic local binding" :expr "(eq (let (x 10) (add x 5)) 15)"))
+
+(define lang-ex-let-nested (dict :name "multiple bindings with flat syntax" :expr "(eq (let (x 1 y 2) (add x y)) 3)"))
 
 (define lang-test-let-shadow (dict :name "inner let shadows outer" :expr "(eq (let (x 1) (let (x 2) x)) 2)"))
 
 (define lang-test-let-body-single (dict :name "let takes one body expr, use do for multiple" :expr "(eq (let (x 1) (do (add x 1) (add x 2))) 3)"))
 
-(define lang-ex-letrec-factorial (dict :name "recursive factorial" :expr "(eq (letrec (fact (fn (n) (if (le n 1) 1 (mul n (fact (sub n 1)))))) (fact 5)) 120)"))
+(define lang-test-let-sequential (dict :name "later bindings see earlier ones" :expr "(eq (let (a 1 b (add a 1) c (add b 1)) c) 3)"))
 
-(define lang-ex-letrec-sequential (dict :name "sequential bindings" :expr "(eq (letrec (x 10 y (add x 5)) y) 15)"))
-
-(define lang-test-letrec-mutual (dict :name "mutual recursion" :expr "(eq (letrec (even? (fn (n) (if (eq n 0) true (odd? (sub n 1)))) odd? (fn (n) (if (eq n 0) false (even? (sub n 1))))) (and (even? 4) (odd? 3))) true)"))
-
-(define lang-test-letrec-later-uses-earlier (dict :name "later bindings see earlier ones" :expr "(eq (letrec (a 1 b (add a 1) c (add b 1)) c) 3)"))
+(define lang-form-let (dict :symbol "lang-form-let" :name "let" :description "Local bindings. (let (name value ...) body). Binds names to values in a new scope, then evaluates body. Flat alternating syntax: (let (x 1 y 2) body). Bindings are sequential — later bindings can reference earlier ones. Takes exactly one body expression — use do for multiple body expressions." :keywords (list "binding" "local variable" "scope" "name" "assignment" "temporary" "block") :examples (list lang-ex-let-basic lang-ex-let-nested) :tests (list lang-test-let-shadow lang-test-let-body-single lang-test-let-sequential)))
 
 (define lang-ex-do-sequence (dict :name "sequential evaluation returns last" :expr "(eq (do 1 2 3) 3)"))
 
@@ -218,23 +224,29 @@
 
 (define lang-test-do-nested (dict :name "nested do" :expr "(eq (do (do 1 2) (do 3 4)) 4)"))
 
+(define lang-form-do (dict :symbol "lang-form-do" :name "do" :description "Sequential evaluation. (do expr1 expr2 ... exprN). Evaluates all expressions in order and returns the value of the last one. Used to sequence multiple expressions where only one is expected — for example, inside a let body or an if branch." :keywords (list "sequence" "block" "begin" "progn" "multiple expressions" "side effects" "imperative") :examples (list lang-ex-do-sequence lang-ex-do-with-let) :tests (list lang-test-do-single lang-test-do-nested)))
+
 (define lang-ex-fn-basic (dict :name "create and call a function" :expr "(eq ((fn (x y) (add x y)) 3 4) 7)"))
 
-(define lang-ex-fn-closure (dict :name "closures capture enclosing scope" :expr "(let (make-adder (fn (n) (fn (x) (add x n)))) (eq ((make-adder 10) 5) 15))"))
+(define lang-ex-fn-closure-form (dict :name "closures capture enclosing scope" :expr "(let (make-adder (fn (n) (fn (x) (add x n)))) (eq ((make-adder 10) 5) 15))"))
 
 (define lang-test-fn-zero-args (dict :name "zero-arg function" :expr "(eq ((fn () 42)) 42)"))
 
 (define lang-test-fn-rest-params (dict :name "rest params collect remaining args" :expr "(eq ((fn (a & rest) rest) 1 2 3) (list 2 3))"))
 
-(define lang-test-fn-higher-order (dict :name "functions as arguments" :expr "(eq (map (fn (x) (mul x x)) (list 1 2 3)) (list 1 4 9))"))
+(define lang-test-fn-higher-order-form (dict :name "functions as arguments" :expr "(eq (map (fn (x) (mul x x)) (list 1 2 3)) (list 1 4 9))"))
+
+(define lang-form-fn (dict :symbol "lang-form-fn" :name "fn" :description "Function creation. (fn (params) body). Creates a function value (closure). Non-eager — the body is not evaluated until the function is called. Params is a list of parameter names. Rest params with & collect remaining arguments: (fn (a & rest) body). The body is a single expression (use do for multiple). Functions close over their lexical scope at creation time. Functions cannot call themselves — use loop/recur for iteration." :keywords (list "function" "lambda" "closure" "create function" "define function" "parameters" "rest params" "abstraction") :examples (list lang-ex-fn-basic lang-ex-fn-closure-form) :tests (list lang-test-fn-zero-args lang-test-fn-rest-params lang-test-fn-higher-order-form) :see-also (list (link 'lang-type-fn))))
 
 (define lang-ex-form-custom-when (dict :name "custom control flow with form" :expr "(let (my-when (form (test body) (list 'if test body nil))) (eq (my-when true :yes) :yes))"))
 
-(define lang-ex-form-short-circuit (dict :name "forms enable short-circuit evaluation" :expr "(do (or true (assert false \"not reached\")) true)"))
+(define lang-ex-form-short-circuit-form (dict :name "forms enable short-circuit evaluation" :expr "(do (or true (assert false \"not reached\")) true)"))
 
-(define lang-test-form-type (dict :name "form creates a form value" :expr "(eq (type (form (x) x)) :form)"))
+(define lang-test-form-type-form (dict :name "form creates a form value" :expr "(eq (type (form (x) x)) :form)"))
 
-(define lang-test-form-rest-params (dict :name "form with rest params" :expr "(let (my-list (form (& args) (cons 'list args))) (eq (my-list 1 2 3) (list 1 2 3)))"))
+(define lang-test-form-rest-params-form (dict :name "form with rest params" :expr "(let (my-list (form (& args) (cons 'list args))) (eq (my-list 1 2 3) (list 1 2 3)))"))
+
+(define lang-form-form (dict :symbol "lang-form-form" :name "form" :description "Form (fexpr) creation. (form (params) body). Like fn but receives unevaluated AST as logos data — symbols, lists, and literals are passed as-is without evaluation. The body returns an expansion value, which is converted back to AST and evaluated in the caller's scope. This enables user-defined control flow: short-circuit logic, multi-way branching, conditional execution. Supports rest params with &." :keywords (list "macro" "fexpr" "metaprogramming" "syntax extension" "unevaluated" "expansion" "AST" "control flow") :examples (list lang-ex-form-custom-when lang-ex-form-short-circuit-form) :tests (list lang-test-form-type-form lang-test-form-rest-params-form) :see-also (list (link 'lang-type-form))))
 
 (define lang-ex-quote-symbol (dict :name "quote creates symbol values" :expr "(eq (type 'foo) :symbol)"))
 
@@ -244,6 +256,8 @@
 
 (define lang-test-quote-to-string (dict :name "symbol to string" :expr "(eq (to-string 'my-name) \"my-name\")"))
 
+(define lang-form-quote (dict :symbol "lang-form-quote" :name "quote" :description "Prevents evaluation. (quote x) or the shorthand 'x. When applied to a name, creates a symbol value instead of resolving it as a graph reference. When applied to a list, returns the list as data without evaluating it as a function call. The reader macro ' is syntactic sugar for quote: 'foo expands to (quote foo)." :keywords (list "quote" "symbol" "prevent evaluation" "literal" "tick" "reader macro" "unevaluated" "data") :examples (list lang-ex-quote-symbol lang-ex-quote-list) :tests (list lang-test-quote-equality lang-test-quote-to-string) :see-also (list (link 'lang-type-symbol))))
+
 (define lang-ex-apply-basic (dict :name "apply a function to a list of args" :expr "(eq (apply add (list 3 4)) 7)"))
 
 (define lang-ex-apply-user-fn (dict :name "apply with user-defined function" :expr "(let (sum3 (fn (a b c) (add a (add b c)))) (eq (apply sum3 (list 1 2 3)) 6))"))
@@ -251,6 +265,8 @@
 (define lang-test-apply-builtin (dict :name "apply works on builtins" :expr "(eq (apply concat (list \"hello\" \" \" \"world\")) \"hello world\")"))
 
 (define lang-test-apply-empty (dict :name "apply with empty list" :expr "(eq (apply list (list)) (list))"))
+
+(define lang-form-apply (dict :symbol "lang-form-apply" :name "apply" :description "Applies a function to a list of arguments. (apply fn args-list). Spreads the list as positional arguments to the function. Works with fn, form, and builtin values. Useful when arguments are computed as a list at runtime." :keywords (list "apply" "spread" "call with list" "unpack" "variadic" "dynamic call" "splat") :examples (list lang-ex-apply-basic lang-ex-apply-user-fn) :tests (list lang-test-apply-builtin lang-test-apply-empty)))
 
 (define lang-ex-sort-by-identity (dict :name "sort numbers" :expr "(eq (sort-by (fn (x) x) (list 3 1 4 1 5)) (list 1 1 3 4 5))"))
 
@@ -260,61 +276,31 @@
 
 (define lang-test-sort-by-empty (dict :name "sort empty list" :expr "(eq (sort-by (fn (x) x) (list)) (list))"))
 
-(define lang-form-if (dict :symbol "lang-form-if" :name "if" :description "Conditional branching. (if test then else). Evaluates test — if truthy, evaluates and returns then; if falsy, evaluates and returns else. The else branch is optional and defaults to nil. Non-eager: only the chosen branch is evaluated. See lang-concept-truthy for what counts as truthy/falsy." :keywords (list "conditional" "branch" "ternary" "if-then-else" "guard" "predicate" "control flow") :examples (list lang-ex-if-basic lang-ex-if-no-else) :tests (list lang-test-if-truthy lang-test-if-nested lang-test-if-nil-falsy)))
+(define lang-form-sort-by (dict :symbol "lang-form-sort-by" :name "sort-by" :description "Sorts a list using a key function. (sort-by key-fn list). Applies key-fn to each element to extract a sort key, then sorts by those keys using universal ordering (all types are comparable via lt/gt). Returns a new sorted list. The key function is called once per element." :keywords (list "sort" "order" "compare" "rank" "arrange" "key function" "ascending" "collection") :examples (list lang-ex-sort-by-identity lang-ex-sort-by-field) :tests (list lang-test-sort-by-strings lang-test-sort-by-empty)))
 
-(define lang-form-let (dict :symbol "lang-form-let" :name "let" :description "Local binding. (let (name value) body). Binds name to value in a new scope, then evaluates body in that scope. Takes exactly one binding pair and one body expression — use nested let for multiple bindings, use do for multiple body expressions. The binding is not visible to the value expression (use letrec for self-reference)." :keywords (list "binding" "local variable" "scope" "name" "assignment" "temporary" "block") :examples (list lang-ex-let-basic lang-ex-let-nested) :tests (list lang-test-let-shadow lang-test-let-body-single)))
+(define lang-ex-loop-sum (dict :name "sum a list with loop/recur" :expr "(eq (loop ((xs (list 1 2 3 4)) (acc 0)) (if (empty? xs) acc (recur (rest xs) (add acc (head xs))))) 10)"))
 
-(define lang-form-letrec (dict :symbol "lang-form-letrec" :name "letrec" :description "Sequential bindings with recursion support. (letrec (a expr-a b expr-b ...) body). Like let but takes multiple binding pairs processed sequentially — later bindings can reference earlier ones. Supports self-recursion and mutual recursion via closure back-patching. The primary way to define local recursive functions." :keywords (list "recursive binding" "mutual recursion" "self-reference" "sequential binding" "local recursion" "closure" "back-patching") :examples (list lang-ex-letrec-factorial lang-ex-letrec-sequential) :tests (list lang-test-letrec-mutual lang-test-letrec-later-uses-earlier)))
+(define lang-ex-loop-countdown (dict :name "countdown to zero" :expr "(eq (loop ((n 5) (acc (list))) (if (eq n 0) acc (recur (sub n 1) (append acc (list n))))) (list 5 4 3 2 1))"))
 
-(define lang-form-do (dict :symbol "lang-form-do" :name "do" :description "Sequential evaluation. (do expr1 expr2 ... exprN). Evaluates all expressions in order and returns the value of the last one. Used to sequence multiple expressions where only one is expected — for example, inside a let body or an if branch. The primary way to combine side effects with a return value." :keywords (list "sequence" "block" "begin" "progn" "multiple expressions" "side effects" "imperative") :examples (list lang-ex-do-sequence lang-ex-do-with-let) :tests (list lang-test-do-single lang-test-do-nested)))
+(define lang-test-loop-single-binding (dict :name "loop with one binding" :expr "(eq (loop ((n 10)) (if (le n 1) n (recur (sub n 1)))) 1)"))
 
-(define lang-form-fn (dict :symbol "lang-form-fn" :name "fn" :description "Function creation. (fn (params) body). Creates a function value (closure). Non-eager — the body is not evaluated until the function is called. Params is a list of parameter names. Rest params with & collect remaining arguments: (fn (a & rest) body). The body is a single expression (use do for multiple). Functions close over their lexical scope at creation time. See lang-type-fn for the function type." :keywords (list "function" "lambda" "closure" "create function" "define function" "parameters" "rest params" "abstraction") :examples (list lang-ex-fn-basic lang-ex-fn-closure) :tests (list lang-test-fn-zero-args lang-test-fn-rest-params lang-test-fn-higher-order)))
+(define lang-test-loop-nested (dict :name "nested loops" :expr "(eq (loop ((i 0) (acc (list))) (if (eq i 3) acc (recur (add i 1) (append acc (list (loop ((j 0) (inner (list))) (if (eq j 2) inner (recur (add j 1) (append inner (list (add i j)))))))))))  (list (list 0 1) (list 1 2) (list 2 3)))"))
 
-(define lang-form-form (dict :symbol "lang-form-form" :name "form" :description "Form (fexpr) creation. (form (params) body). Like fn but receives unevaluated AST as logos data — symbols, lists, and literals are passed as-is without evaluation. The body returns an expansion value, which is converted back to AST and evaluated in the caller's scope. This enables user-defined control flow: short-circuit logic, multi-way branching, conditional execution. Supports rest params with &. See lang-type-form for the form type." :keywords (list "macro" "fexpr" "metaprogramming" "syntax extension" "unevaluated" "expansion" "AST" "control flow") :examples (list lang-ex-form-custom-when lang-ex-form-short-circuit) :tests (list lang-test-form-type lang-test-form-rest-params)))
+(define lang-form-loop (dict :symbol "lang-form-loop" :name "loop" :description "Structured iteration. (loop ((name1 init1) (name2 init2) ...) body). Binds each name to its initial value, then evaluates body. Within body, (recur val1 val2 ...) jumps back to the loop head with new values for each binding. This is the sole iteration mechanism — there is no recursion. Bindings use nested pair syntax, unlike let which uses flat syntax. loop/recur replaces what recursion does in other Lisps." :keywords (list "loop" "iteration" "recur" "iterate" "while" "repeat" "accumulate" "tail recursion") :examples (list lang-ex-loop-sum lang-ex-loop-countdown) :tests (list lang-test-loop-single-binding lang-test-loop-nested)))
 
-(define lang-form-quote (dict :symbol "lang-form-quote" :name "quote" :description "Prevents evaluation. (quote x) or the shorthand 'x. When applied to a name, creates a symbol value instead of resolving it as a graph reference. When applied to a list, returns the list as data without evaluating it as a function call. The reader macro ' is syntactic sugar for quote: 'foo expands to (quote foo). Symbols created by quote are inert data — they can be compared, converted to strings, and used in metaprogramming." :keywords (list "quote" "symbol" "prevent evaluation" "literal" "tick" "reader macro" "unevaluated" "data") :examples (list lang-ex-quote-symbol lang-ex-quote-list) :tests (list lang-test-quote-equality lang-test-quote-to-string)))
+(define lang-form-recur (dict :symbol "lang-form-recur" :name "recur" :description "Jumps back to the enclosing loop with new binding values. (recur val1 val2 ...). Must appear in tail position within a loop body — it provides the new values for all loop bindings in order. The number of arguments must match the number of loop bindings. recur is not a standalone form — it only has meaning inside a loop." :keywords (list "recur" "jump" "continue" "next iteration" "tail position" "loop back") :examples (list lang-ex-loop-sum) :tests (list lang-test-loop-single-binding)))
 
-(define lang-form-apply (dict :symbol "lang-form-apply" :name "apply" :description "Applies a function to a list of arguments. (apply fn args-list). Spreads the list as positional arguments to the function. Works with fn, form, and builtin values. Useful when arguments are computed as a list at runtime. The args-list must be a list — apply unpacks it into individual arguments for the call." :keywords (list "apply" "spread" "call with list" "unpack" "variadic" "dynamic call" "splat") :examples (list lang-ex-apply-basic lang-ex-apply-user-fn) :tests (list lang-test-apply-builtin lang-test-apply-empty)))
-
-(define lang-form-sort-by (dict :symbol "lang-form-sort-by" :name "sort-by" :description "Sorts a list using a key function. (sort-by key-fn list). Applies key-fn to each element to extract a sort key, then sorts by those keys using universal ordering (all types are comparable via lt/gt). Returns a new sorted list — the original is unchanged. The key function is called once per element. Works with any comparable key type: numbers, strings, keywords." :keywords (list "sort" "order" "compare" "rank" "arrange" "key function" "ascending" "collection") :examples (list lang-ex-sort-by-identity lang-ex-sort-by-field) :tests (list lang-test-sort-by-strings lang-test-sort-by-empty)))
-
-(define lang-forms (dict :symbol "lang-forms" :name "Core Forms" :description "The 9 core forms are non-eager evaluation rules built into the evaluator. Unlike builtins (which receive already-evaluated arguments), forms control when and whether their arguments are evaluated. They provide conditional branching (if), local bindings (let, letrec), sequencing (do), abstraction (fn, form), data quotation (quote), dynamic dispatch (apply), and ordering (sort-by)." :keywords (list "special forms" "core forms" "non-eager" "evaluation rules" "syntax" "control flow" "language primitives") :members (list lang-form-if lang-form-let lang-form-letrec lang-form-do lang-form-fn lang-form-form lang-form-quote lang-form-apply lang-form-sort-by)))
-
-(define lang (dict :symbol "lang" :name "Logos Language Reference" :description "Self-validating language reference for the logos programming environment." :members (list lang-types lang-forms)))
-
-(define lang-ex-if-no-else (dict :name "else branch provides a default" :expr "(eq (if false :yes nil) nil)"))
-
-(define lang-form-if (dict :symbol "lang-form-if" :name "if" :description "Conditional branching. (if test then else). Evaluates test — if truthy, evaluates and returns then; if falsy, evaluates and returns else. All three arguments are required. Non-eager: only the chosen branch is evaluated. Use nil as the else branch when no alternative is needed. See lang-concept-truthy for what counts as truthy/falsy." :keywords (list "conditional" "branch" "ternary" "if-then-else" "guard" "predicate" "control flow") :examples (list lang-ex-if-basic lang-ex-if-no-else) :tests (list lang-test-if-truthy lang-test-if-nested lang-test-if-nil-falsy)))
-
-(define lang (dict :symbol "lang" :name "Logos Language Reference" :description "Self-validating language reference for the logos programming environment." :members (list lang-types lang-forms)))
-
-(define lang-forms (dict :symbol "lang-forms" :name "Core Forms" :description "The 9 core forms are non-eager evaluation rules built into the evaluator. Unlike builtins (which receive already-evaluated arguments), forms control when and whether their arguments are evaluated. They provide conditional branching (if), local bindings (let, letrec), sequencing (do), abstraction (fn, form), data quotation (quote), dynamic dispatch (apply), and ordering (sort-by)." :keywords (list "special forms" "core forms" "non-eager" "evaluation rules" "syntax" "control flow" "language primitives") :members (list lang-form-if lang-form-let lang-form-letrec lang-form-do lang-form-fn lang-form-form lang-form-quote lang-form-apply lang-form-sort-by)))
-
-(define lang (dict :symbol "lang" :name "Logos Language Reference" :description "Self-validating language reference for the logos programming environment." :members (list lang-types lang-forms)))
-
-(define lang-form-if (dict :symbol "lang-form-if" :name "if" :description "Conditional branching. (if test then else). Evaluates test — if truthy, evaluates and returns then; if falsy, evaluates and returns else. All three arguments are required. Non-eager: only the chosen branch is evaluated. Use nil as the else branch when no alternative is needed. See lang-concept-truthy for what counts as truthy/falsy." :keywords (list "conditional" "branch" "ternary" "if-then-else" "guard" "predicate" "control flow") :examples (list lang-ex-if-basic lang-ex-if-no-else) :tests (list lang-test-if-truthy lang-test-if-nested lang-test-if-nil-falsy)))
-
-(define lang-forms (dict :symbol "lang-forms" :name "Core Forms" :description "The 9 core forms are non-eager evaluation rules built into the evaluator. Unlike builtins (which receive already-evaluated arguments), forms control when and whether their arguments are evaluated. They provide conditional branching (if), local bindings (let, letrec), sequencing (do), abstraction (fn, form), data quotation (quote), dynamic dispatch (apply), and ordering (sort-by)." :keywords (list "special forms" "core forms" "non-eager" "evaluation rules" "syntax" "control flow" "language primitives") :members (list lang-form-if lang-form-let lang-form-letrec lang-form-do lang-form-fn lang-form-form lang-form-quote lang-form-apply lang-form-sort-by)))
-
-(define lang-form-fn (dict :symbol "lang-form-fn" :name "fn" :description "Function creation. (fn (params) body). Creates a function value (closure). Non-eager — the body is not evaluated until the function is called. Params is a list of parameter names. Rest params with & collect remaining arguments: (fn (a & rest) body). The body is a single expression (use do for multiple). Functions close over their lexical scope at creation time." :keywords (list "function" "lambda" "closure" "create function" "define function" "parameters" "rest params" "abstraction") :examples (list lang-ex-fn-basic lang-ex-fn-closure) :tests (list lang-test-fn-zero-args lang-test-fn-rest-params lang-test-fn-higher-order) :see-also (list lang-type-fn)))
-
-(define lang-form-form (dict :symbol "lang-form-form" :name "form" :description "Form (fexpr) creation. (form (params) body). Like fn but receives unevaluated AST as logos data — symbols, lists, and literals are passed as-is without evaluation. The body returns an expansion value, which is converted back to AST and evaluated in the caller's scope. This enables user-defined control flow: short-circuit logic, multi-way branching, conditional execution. Supports rest params with &." :keywords (list "macro" "fexpr" "metaprogramming" "syntax extension" "unevaluated" "expansion" "AST" "control flow") :examples (list lang-ex-form-custom-when lang-ex-form-short-circuit) :tests (list lang-test-form-type lang-test-form-rest-params) :see-also (list lang-type-form)))
-
-(define lang-form-quote (dict :symbol "lang-form-quote" :name "quote" :description "Prevents evaluation. (quote x) or the shorthand 'x. When applied to a name, creates a symbol value instead of resolving it as a graph reference. When applied to a list, returns the list as data without evaluating it as a function call. The reader macro ' is syntactic sugar for quote: 'foo expands to (quote foo). Symbols created by quote are inert data — they can be compared, converted to strings, and used in metaprogramming." :keywords (list "quote" "symbol" "prevent evaluation" "literal" "tick" "reader macro" "unevaluated" "data") :examples (list lang-ex-quote-symbol lang-ex-quote-list) :tests (list lang-test-quote-equality lang-test-quote-to-string) :see-also (list lang-type-symbol)))
-
-(define lang (dict :symbol "lang" :name "Logos Language Reference" :description "Self-validating language reference for the logos programming environment." :members (list lang-types lang-forms)))
-
-(define lang-forms (dict :symbol "lang-forms" :name "Core Forms" :description "The 9 core forms are non-eager evaluation rules built into the evaluator. Unlike builtins (which receive already-evaluated arguments), forms control when and whether their arguments are evaluated. They provide conditional branching (if), local bindings (let, letrec), sequencing (do), abstraction (fn, form), data quotation (quote), dynamic dispatch (apply), and ordering (sort-by)." :keywords (list "special forms" "core forms" "non-eager" "evaluation rules" "syntax" "control flow" "language primitives") :members (list lang-form-if lang-form-let lang-form-letrec lang-form-do lang-form-fn lang-form-form lang-form-quote lang-form-apply lang-form-sort-by)))
+(define lang-forms (dict :symbol "lang-forms" :name "Core Forms" :description "The 10 core forms are non-eager evaluation rules built into the evaluator. Unlike builtins (which receive already-evaluated arguments), forms control when and whether their arguments are evaluated. They provide conditional branching (if), local bindings (let), sequencing (do), abstraction (fn, form), data quotation (quote), dynamic dispatch (apply), ordering (sort-by), and iteration (loop/recur)." :keywords (list "special forms" "core forms" "non-eager" "evaluation rules" "syntax" "control flow" "language primitives") :members (list lang-form-if lang-form-let lang-form-do lang-form-fn lang-form-form lang-form-quote lang-form-apply lang-form-sort-by lang-form-loop lang-form-recur)))
 
 (define lang-ex-list-create (dict :name "create a list" :expr "(eq (list 1 2 3) (list 1 2 3))"))
 
 (define lang-ex-list-heterogeneous (dict :name "lists can hold mixed types" :expr "(eq (list 1 \"two\" :three true nil) (list 1 \"two\" :three true nil))"))
 
-(define lang-test-list-empty (dict :name "empty list" :expr "(eq (list) (list))"))
+(define lang-test-list-empty-builtin (dict :name "empty list" :expr "(eq (list) (list))"))
 
-(define lang-test-list-type (dict :name "list returns a list" :expr "(eq (type (list 1 2)) :list)"))
+(define lang-test-list-type-builtin (dict :name "list returns a list" :expr "(eq (type (list 1 2)) :list)"))
 
-(define lang-builtin-list (dict :symbol "lang-builtin-list" :name "list" :description "Creates a list from its arguments. (list) returns an empty list. (list 1 2 3) returns a three-element list. Takes any number of arguments of any type. Lists are the primary ordered collection in logos." :keywords (list "create list" "construct" "sequence" "collection" "variadic" "array") :examples (list lang-ex-list-create lang-ex-list-heterogeneous) :tests (list lang-test-list-empty lang-test-list-type) :see-also (list lang-type-list)))
+(define lang-builtin-list (dict :symbol "lang-builtin-list" :name "list" :description "Creates a list from its arguments. (list) returns an empty list. (list 1 2 3) returns a three-element list. Takes any number of arguments of any type." :keywords (list "create list" "construct" "sequence" "collection" "variadic" "array") :examples (list lang-ex-list-create lang-ex-list-heterogeneous) :tests (list lang-test-list-empty-builtin lang-test-list-type-builtin) :see-also (list (link 'lang-type-list))))
 
 (define lang-ex-dict-create (dict :name "create a map with dict" :expr "(eq (get (dict :a 1 :b 2) :a) 1)"))
 
@@ -324,7 +310,7 @@
 
 (define lang-test-dict-pairs (dict :name "dict takes key-value pairs" :expr "(eq (len (keys (dict :a 1 :b 2 :c 3))) 3)"))
 
-(define lang-builtin-dict (dict :symbol "lang-builtin-dict" :name "dict" :description "Creates a map from key-value pairs. (dict :a 1 :b 2) returns a map with two entries. (dict) returns an empty map. Arguments must come in pairs — odd count is an error. Keys are strings internally; keywords are coerced to their string form, so :a and \"a\" are the same key." :keywords (list "map" "dictionary" "hash" "create map" "key-value" "construct" "associative") :examples (list lang-ex-dict-create lang-ex-dict-string-keys) :tests (list lang-test-dict-empty lang-test-dict-pairs) :see-also (list lang-type-map)))
+(define lang-builtin-dict (dict :symbol "lang-builtin-dict" :name "dict" :description "Creates a map from key-value pairs. (dict :a 1 :b 2). (dict) returns an empty map. Arguments must come in pairs. Keys are strings internally; keywords are coerced to their string form." :keywords (list "map" "dictionary" "hash" "create map" "key-value" "construct" "associative") :examples (list lang-ex-dict-create lang-ex-dict-string-keys) :tests (list lang-test-dict-empty lang-test-dict-pairs) :see-also (list (link 'lang-type-map))))
 
 (define lang-ex-get-map (dict :name "get a value from a map" :expr "(eq (get (dict :x 42) :x) 42)"))
 
@@ -334,7 +320,7 @@
 
 (define lang-test-get-nested (dict :name "get on nested maps" :expr "(eq (get (get (dict :a (dict :b 99)) :a) :b) 99)"))
 
-(define lang-builtin-get (dict :symbol "lang-builtin-get" :name "get" :description "Retrieves a value from a map by key. (get map key). Returns nil if the key is not present. Works with both keyword and string keys (they are equivalent in maps)." :keywords (list "lookup" "access" "retrieve" "map access" "field" "property" "key") :examples (list lang-ex-get-map lang-ex-get-missing) :tests (list lang-test-get-string-key lang-test-get-nested) :see-also (list lang-type-map lang-builtin-dict)))
+(define lang-builtin-get (dict :symbol "lang-builtin-get" :name "get" :description "Retrieves a value from a map by key. (get map key). Returns nil if the key is not present. Works with both keyword and string keys." :keywords (list "lookup" "access" "retrieve" "map access" "field" "property" "key") :examples (list lang-ex-get-map lang-ex-get-missing) :tests (list lang-test-get-string-key lang-test-get-nested) :see-also (list (link 'lang-type-map) (link 'lang-builtin-dict))))
 
 (define lang-ex-head-basic (dict :name "first element of a list" :expr "(eq (head (list 10 20 30)) 10)"))
 
@@ -342,15 +328,15 @@
 
 (define lang-test-head-nil (dict :name "head of empty list is nil" :expr "(eq (head (list)) nil)"))
 
-(define lang-builtin-head (dict :symbol "lang-builtin-head" :name "head" :description "Returns the first element of a list. (head list). Returns nil for an empty list. The fundamental list accessor — paired with rest for recursive list processing." :keywords (list "first" "car" "front" "list access" "decompose") :examples (list lang-ex-head-basic) :tests (list lang-test-head-single lang-test-head-nil) :see-also (list lang-type-list)))
+(define lang-builtin-head (dict :symbol "lang-builtin-head" :name "head" :description "Returns the first element of a list. (head list). Returns nil for an empty list. Paired with rest for list processing via loop/recur." :keywords (list "first" "car" "front" "list access" "decompose") :examples (list lang-ex-head-basic) :tests (list lang-test-head-single lang-test-head-nil) :see-also (list (link 'lang-type-list) (link 'lang-builtin-rest))))
 
 (define lang-ex-rest-basic (dict :name "everything after the first element" :expr "(eq (rest (list 1 2 3)) (list 2 3))"))
 
 (define lang-test-rest-single (dict :name "rest of single-element list is empty" :expr "(eq (rest (list 1)) (list))"))
 
-(define lang-test-rest-empty (dict :name "rest of empty list is nil" :expr "(eq (rest (list)) nil)"))
+(define lang-test-rest-empty (dict :name "rest of empty list is empty list" :expr "(eq (rest (list)) (list))"))
 
-(define lang-builtin-rest (dict :symbol "lang-builtin-rest" :name "rest" :description "Returns all elements after the first. (rest list). Returns nil for an empty list, returns an empty list for a single-element list. Paired with head for recursive list decomposition." :keywords (list "tail" "cdr" "remaining" "after first" "list decompose") :examples (list lang-ex-rest-basic) :tests (list lang-test-rest-single lang-test-rest-empty) :see-also (list lang-type-list lang-builtin-head)))
+(define lang-builtin-rest (dict :symbol "lang-builtin-rest" :name "rest" :description "Returns all elements after the first. (rest list). Returns nil for an empty list, returns an empty list for a single-element list. Paired with head for list decomposition." :keywords (list "tail" "cdr" "remaining" "after first" "list decompose") :examples (list lang-ex-rest-basic) :tests (list lang-test-rest-single lang-test-rest-empty) :see-also (list (link 'lang-type-list) (link 'lang-builtin-head))))
 
 (define lang-ex-len-list (dict :name "length of a list" :expr "(eq (len (list 1 2 3 4)) 4)"))
 
@@ -360,7 +346,7 @@
 
 (define lang-test-len-empty-map (dict :name "empty map has length 0" :expr "(eq (len (dict)) 0)"))
 
-(define lang-builtin-len (dict :symbol "lang-builtin-len" :name "len" :description "Returns the number of elements in a list or map. (len collection). Works on lists (element count) and maps (key count). Does not work on strings — this is by design (encoding-agnostic string model)." :keywords (list "length" "size" "count" "number of elements" "cardinality") :examples (list lang-ex-len-list lang-ex-len-map) :tests (list lang-test-len-empty-list lang-test-len-empty-map) :see-also (list lang-type-list lang-type-map)))
+(define lang-builtin-len (dict :symbol "lang-builtin-len" :name "len" :description "Returns the number of elements in a list or map. (len collection). Works on lists (element count) and maps (key count). Does not work on strings — by design (encoding-agnostic)." :keywords (list "length" "size" "count" "number of elements" "cardinality") :examples (list lang-ex-len-list lang-ex-len-map) :tests (list lang-test-len-empty-list lang-test-len-empty-map) :see-also (list (link 'lang-type-list) (link 'lang-type-map))))
 
 (define lang-ex-keys-basic (dict :name "get all keys from a map" :expr "(eq (len (keys (dict :a 1 :b 2 :c 3))) 3)"))
 
@@ -368,17 +354,17 @@
 
 (define lang-test-keys-strings (dict :name "keys are returned as strings" :expr "(eq (type (head (keys (dict :a 1)))) :string)"))
 
-(define lang-builtin-keys (dict :symbol "lang-builtin-keys" :name "keys" :description "Returns a list of all keys in a map. (keys map). Keys are returned as strings (since maps use string keys internally). Returns an empty list for an empty map. Order is not guaranteed." :keywords (list "map keys" "key list" "fields" "properties" "enumerate") :examples (list lang-ex-keys-basic) :tests (list lang-test-keys-empty lang-test-keys-strings) :see-also (list lang-type-map lang-builtin-dict)))
+(define lang-builtin-keys (dict :symbol "lang-builtin-keys" :name "keys" :description "Returns a list of all keys in a map. (keys map). Keys are returned as strings. Returns an empty list for an empty map. Order is not guaranteed." :keywords (list "map keys" "key list" "fields" "properties" "enumerate") :examples (list lang-ex-keys-basic) :tests (list lang-test-keys-empty lang-test-keys-strings) :see-also (list (link 'lang-type-map) (link 'lang-builtin-dict))))
 
 (define lang-ex-eq-primitives (dict :name "equality for primitives" :expr "(and (eq 42 42) (and (eq \"hello\" \"hello\") (eq :foo :foo)))"))
 
 (define lang-ex-eq-deep (dict :name "deep structural equality" :expr "(eq (list (dict :a 1) 2) (list (dict :a 1) 2))"))
 
-(define lang-test-eq-cross-type (dict :name "different types are never equal" :expr "(and (not (eq 1 1.0)) (not (eq nil false)))"))
+(define lang-test-eq-cross-type-builtin (dict :name "different types are never equal" :expr "(and (not (eq 1 1.0)) (not (eq nil false)))"))
 
 (define lang-test-eq-returns-bool (dict :name "eq returns a boolean" :expr "(eq (type (eq 1 2)) :bool)"))
 
-(define lang-builtin-eq (dict :symbol "lang-builtin-eq" :name "eq" :description "Tests structural equality. (eq a b). Compares values for primitives, compares deeply for collections (lists by element order, maps by key-value pairs). Different types are never equal: 1 is not 1.0, :foo is not \"foo\", nil is not false. Returns a boolean." :keywords (list "equal" "equality" "compare" "same" "identical" "deep equal" "structural") :examples (list lang-ex-eq-primitives lang-ex-eq-deep) :tests (list lang-test-eq-cross-type lang-test-eq-returns-bool) :see-also (list lang-concept-equality)))
+(define lang-builtin-eq (dict :symbol "lang-builtin-eq" :name "eq" :description "Tests structural equality. (eq a b). Compares values for primitives, compares deeply for collections. Different types are never equal: 1 is not 1.0, :foo is not \"foo\", nil is not false. Returns a boolean." :keywords (list "equal" "equality" "compare" "same" "identical" "deep equal" "structural") :examples (list lang-ex-eq-primitives lang-ex-eq-deep) :tests (list lang-test-eq-cross-type-builtin lang-test-eq-returns-bool) :see-also (list (link 'lang-concept-equality))))
 
 (define lang-ex-to-string-int (dict :name "convert int to string" :expr "(eq (to-string 42) \"42\")"))
 
@@ -388,19 +374,27 @@
 
 (define lang-test-to-string-symbol (dict :name "symbol to string" :expr "(eq (to-string 'foo) \"foo\")"))
 
-(define lang-builtin-to-string (dict :symbol "lang-builtin-to-string" :name "to-string" :description "Converts any value to its string representation. (to-string value). Integers become digit strings, booleans become \"true\"/\"false\", keywords include the colon prefix (:foo becomes \":foo\"), symbols become their bare name (no quote). Useful for building display strings and debugging." :keywords (list "convert" "stringify" "format" "display" "print" "string conversion" "serialize") :examples (list lang-ex-to-string-int lang-ex-to-string-keyword) :tests (list lang-test-to-string-bool lang-test-to-string-symbol) :see-also (list lang-type-string)))
+(define lang-builtin-to-string (dict :symbol "lang-builtin-to-string" :name "to-string" :description "Converts any value to its string representation. (to-string value). Integers become digit strings, booleans become \"true\"/\"false\", keywords include the colon prefix, symbols become their bare name." :keywords (list "convert" "stringify" "format" "display" "string conversion" "serialize") :examples (list lang-ex-to-string-int lang-ex-to-string-keyword) :tests (list lang-test-to-string-bool lang-test-to-string-symbol) :see-also (list (link 'lang-type-string))))
 
 (define lang-ex-concat-basic (dict :name "concatenate strings" :expr "(eq (concat \"hello\" \" \" \"world\") \"hello world\")"))
 
 (define lang-ex-concat-variadic (dict :name "concat takes any number of arguments" :expr "(eq (concat \"a\" \"b\" \"c\" \"d\") \"abcd\")"))
 
-(define lang-test-concat-empty (dict :name "concat with no args returns empty string" :expr "(eq (concat) \"\")"))
+(define lang-test-concat-empty (dict :name "concat with one empty string" :expr "(eq (concat \"\") \"\")"))
 
 (define lang-test-concat-single (dict :name "concat with one arg" :expr "(eq (concat \"only\") \"only\")"))
 
-(define lang-builtin-concat (dict :symbol "lang-builtin-concat" :name "concat" :description "Concatenates strings. (concat s1 s2 ...). Takes any number of string arguments and returns their concatenation. (concat) with no args returns an empty string. The primary string-building primitive — higher-level operations like join are built on top of concat in the base library." :keywords (list "concatenate" "join strings" "string building" "combine" "append strings" "variadic") :examples (list lang-ex-concat-basic lang-ex-concat-variadic) :tests (list lang-test-concat-empty lang-test-concat-single) :see-also (list lang-type-string)))
+(define lang-builtin-concat (dict :symbol "lang-builtin-concat" :name "concat" :description "Concatenates strings. (concat s1 s2 ...). Takes any number of string arguments. (concat) with no args returns an empty string. The primary string-building primitive." :keywords (list "concatenate" "join strings" "string building" "combine" "append strings" "variadic") :examples (list lang-ex-concat-basic lang-ex-concat-variadic) :tests (list lang-test-concat-empty lang-test-concat-single) :see-also (list (link 'lang-type-string))))
 
-(define lang-builtins-data (dict :symbol "lang-builtins-data" :name "Data" :description "Builtins for creating and inspecting the core data structures. list and dict construct collections, get and keys access map contents, head and rest decompose lists, len measures collections, eq tests structural equality, to-string converts to text, and concat builds strings." :keywords (list "data" "collections" "construction" "access" "equality" "string" "core data") :members (list lang-builtin-list lang-builtin-dict lang-builtin-get lang-builtin-head lang-builtin-rest lang-builtin-len lang-builtin-keys lang-builtin-eq lang-builtin-to-string lang-builtin-concat)))
+(define lang-ex-modules-basic (dict :name "modules returns list of connected modules" :expr "(eq (type (modules)) :list)"))
+
+(define lang-builtin-modules (dict :symbol "lang-builtin-modules" :name "modules" :description "Returns a list of connected module names. (modules). Each module is an external process that speaks JSON over a unix socket. Used to discover what capabilities are available at runtime." :keywords (list "modules" "plugins" "extensions" "connected" "services" "discovery") :examples (list lang-ex-modules-basic)))
+
+(define lang-ex-send-basic (dict :name "send a request to a module" :expr "(eq (type (send \"mod-time\" (dict \"op\" \"now\"))) :map)"))
+
+(define lang-builtin-send (dict :symbol "lang-builtin-send" :name "send" :description "Sends a JSON request to a module and returns the response. (send module-name request-map). The request is serialized to JSON, sent over the module socket, and the response is parsed back to logos data. This is the sole mechanism for communicating with external modules." :keywords (list "send" "module" "request" "IPC" "message" "communication" "external") :examples (list lang-ex-send-basic) :see-also (list (link 'lang-builtin-modules))))
+
+(define lang-builtins-data (dict :symbol "lang-builtins-data" :name "Data" :description "Builtins for creating and inspecting core data structures. list and dict construct collections, get and keys access map contents, head and rest decompose lists, len measures collections, eq tests structural equality, to-string converts to text, concat builds strings, modules and send communicate with external modules." :keywords (list "data" "collections" "construction" "access" "equality" "string" "core data" "modules") :members (list lang-builtin-list lang-builtin-dict lang-builtin-get lang-builtin-head lang-builtin-rest lang-builtin-len lang-builtin-keys lang-builtin-eq lang-builtin-to-string lang-builtin-concat lang-builtin-modules lang-builtin-send)))
 
 (define lang-ex-add-ints (dict :name "add two integers" :expr "(eq (add 3 4) 7)"))
 
@@ -410,7 +404,7 @@
 
 (define lang-test-add-negative (dict :name "add with negative" :expr "(eq (add 10 (sub 0 3)) 7)"))
 
-(define lang-builtin-add (dict :symbol "lang-builtin-add" :name "add" :description "Adds two numbers. (add a b). Works on integers and floats. Mixed int+float operands promote the result to float. First-class — can be passed to fold, map, apply." :keywords (list "addition" "plus" "sum" "arithmetic" "math" "numeric" "increment") :examples (list lang-ex-add-ints lang-ex-add-promotion) :tests (list lang-test-add-floats lang-test-add-negative) :see-also (list lang-type-int lang-type-float)))
+(define lang-builtin-add (dict :symbol "lang-builtin-add" :name "add" :description "Adds two numbers. (add a b). Works on integers and floats. Mixed int+float promotes to float. First-class — can be passed to fold, map, apply." :keywords (list "addition" "plus" "sum" "arithmetic" "math") :examples (list lang-ex-add-ints lang-ex-add-promotion) :tests (list lang-test-add-floats lang-test-add-negative) :see-also (list (link 'lang-type-int) (link 'lang-type-float))))
 
 (define lang-ex-sub-basic (dict :name "subtract two integers" :expr "(eq (sub 10 3) 7)"))
 
@@ -418,7 +412,7 @@
 
 (define lang-test-sub-float (dict :name "float subtraction" :expr "(eq (sub 5.5 2.0) 3.5)"))
 
-(define lang-builtin-sub (dict :symbol "lang-builtin-sub" :name "sub" :description "Subtracts the second number from the first. (sub a b). Works on integers and floats. Mixed operands promote to float. Use (sub 0 n) for negation." :keywords (list "subtract" "minus" "difference" "arithmetic" "math" "negate") :examples (list lang-ex-sub-basic) :tests (list lang-test-sub-negative-result lang-test-sub-float) :see-also (list lang-builtin-add)))
+(define lang-builtin-sub (dict :symbol "lang-builtin-sub" :name "sub" :description "Subtracts the second number from the first. (sub a b). Works on integers and floats. Use (sub 0 n) for negation." :keywords (list "subtract" "minus" "difference" "arithmetic" "math" "negate") :examples (list lang-ex-sub-basic) :tests (list lang-test-sub-negative-result lang-test-sub-float) :see-also (list (link 'lang-builtin-add))))
 
 (define lang-ex-mul-basic (dict :name "multiply two integers" :expr "(eq (mul 6 7) 42)"))
 
@@ -426,7 +420,7 @@
 
 (define lang-test-mul-float (dict :name "float multiplication" :expr "(eq (mul 2.5 4.0) 10.0)"))
 
-(define lang-builtin-mul (dict :symbol "lang-builtin-mul" :name "mul" :description "Multiplies two numbers. (mul a b). Works on integers and floats. Mixed operands promote to float." :keywords (list "multiply" "times" "product" "arithmetic" "math" "scale") :examples (list lang-ex-mul-basic) :tests (list lang-test-mul-zero lang-test-mul-float) :see-also (list lang-builtin-add lang-builtin-div)))
+(define lang-builtin-mul (dict :symbol "lang-builtin-mul" :name "mul" :description "Multiplies two numbers. (mul a b). Works on integers and floats. Mixed operands promote to float." :keywords (list "multiply" "times" "product" "arithmetic" "math" "scale") :examples (list lang-ex-mul-basic) :tests (list lang-test-mul-zero lang-test-mul-float) :see-also (list (link 'lang-builtin-add))))
 
 (define lang-ex-div-int (dict :name "integer division truncates" :expr "(eq (div 7 2) 3)"))
 
@@ -436,7 +430,7 @@
 
 (define lang-test-div-type (dict :name "int div returns int, float div returns float" :expr "(and (eq (type (div 10 3)) :int) (eq (type (div 10.0 3)) :float))"))
 
-(define lang-builtin-div (dict :symbol "lang-builtin-div" :name "div" :description "Divides the first number by the second. (div a b). Integer division truncates toward zero: (div 7 2) returns 3. Use a float operand for non-truncating division: (div 7.0 2) returns 3.5. Mixed operands promote to float." :keywords (list "divide" "division" "quotient" "arithmetic" "math" "truncate" "integer division") :examples (list lang-ex-div-int lang-ex-div-float) :tests (list lang-test-div-exact lang-test-div-type) :see-also (list lang-builtin-mul lang-builtin-mod)))
+(define lang-builtin-div (dict :symbol "lang-builtin-div" :name "div" :description "Divides the first number by the second. (div a b). Integer division truncates toward zero: (div 7 2) returns 3. Use a float operand for float division: (div 7.0 2) returns 3.5." :keywords (list "divide" "division" "quotient" "arithmetic" "math" "truncate") :examples (list lang-ex-div-int lang-ex-div-float) :tests (list lang-test-div-exact lang-test-div-type) :see-also (list (link 'lang-builtin-mul))))
 
 (define lang-ex-mod-basic (dict :name "remainder after division" :expr "(eq (mod 7 3) 1)"))
 
@@ -444,9 +438,9 @@
 
 (define lang-test-mod-less-than-divisor (dict :name "mod when dividend less than divisor" :expr "(eq (mod 2 5) 2)"))
 
-(define lang-builtin-mod (dict :symbol "lang-builtin-mod" :name "mod" :description "Returns the remainder of integer division. (mod a b). Both arguments must be integers. Useful for divisibility checks: (eq (mod n 2) 0) tests if n is even." :keywords (list "modulo" "remainder" "modulus" "divisibility" "even odd" "arithmetic") :examples (list lang-ex-mod-basic) :tests (list lang-test-mod-even lang-test-mod-less-than-divisor) :see-also (list lang-builtin-div)))
+(define lang-builtin-mod (dict :symbol "lang-builtin-mod" :name "mod" :description "Returns the remainder of integer division. (mod a b). Both arguments must be integers. Useful for divisibility checks: (eq (mod n 2) 0) tests if n is even." :keywords (list "modulo" "remainder" "modulus" "divisibility" "even odd" "arithmetic") :examples (list lang-ex-mod-basic) :tests (list lang-test-mod-even lang-test-mod-less-than-divisor) :see-also (list (link 'lang-builtin-div))))
 
-(define lang-builtins-arithmetic (dict :symbol "lang-builtins-arithmetic" :name "Arithmetic" :description "Builtins for numeric computation. All take two arguments. Integer operations stay integer; mixed int+float promotes to float. Integer division truncates toward zero." :keywords (list "arithmetic" "math" "numeric" "calculation" "numbers" "operators") :members (list lang-builtin-add lang-builtin-sub lang-builtin-mul lang-builtin-div lang-builtin-mod)))
+(define lang-builtins-arithmetic (dict :symbol "lang-builtins-arithmetic" :name "Arithmetic" :description "Builtins for numeric computation. All take two arguments. Integer operations stay integer; mixed int+float promotes to float. Integer division truncates toward zero." :keywords (list "arithmetic" "math" "numeric" "calculation" "numbers") :members (list lang-builtin-add lang-builtin-sub lang-builtin-mul lang-builtin-div lang-builtin-mod)))
 
 (define lang-ex-lt-basic (dict :name "less than comparison" :expr "(and (lt 1 2) (not (lt 2 1)))"))
 
@@ -456,7 +450,7 @@
 
 (define lang-test-lt-strings (dict :name "string comparison is lexicographic" :expr "(lt \"abc\" \"abd\")"))
 
-(define lang-builtin-lt (dict :symbol "lang-builtin-lt" :name "lt" :description "Less than comparison. (lt a b). Returns true if a is strictly less than b. Uses universal ordering — all types are comparable (numbers by value, strings lexicographically, cross-type by type rank). Returns a boolean. Used by sort-by for ordering." :keywords (list "less than" "compare" "order" "smaller" "before" "inequality" "universal ordering") :examples (list lang-ex-lt-basic lang-ex-lt-universal) :tests (list lang-test-lt-equal lang-test-lt-strings)))
+(define lang-builtin-lt (dict :symbol "lang-builtin-lt" :name "lt" :description "Less than comparison. (lt a b). Returns true if a is strictly less than b. Uses universal ordering — all types are comparable (numbers by value, strings lexicographically, cross-type by type rank). Returns a boolean. Used by sort-by for ordering." :keywords (list "less than" "compare" "order" "smaller" "before" "inequality" "universal ordering") :examples (list lang-ex-lt-basic lang-ex-lt-universal) :tests (list lang-test-lt-equal lang-test-lt-strings) :see-also (list (link 'lang-type-bool) (link 'lang-form-sort-by))))
 
 (define lang-ex-gt-basic (dict :name "greater than comparison" :expr "(and (gt 10 5) (not (gt 5 10)))"))
 
@@ -464,7 +458,7 @@
 
 (define lang-test-gt-float (dict :name "float comparison" :expr "(gt 3.14 2.71)"))
 
-(define lang-builtin-gt (dict :symbol "lang-builtin-gt" :name "gt" :description "Greater than comparison. (gt a b). Returns true if a is strictly greater than b. Uses the same universal ordering as lt — all types comparable. Returns a boolean." :keywords (list "greater than" "compare" "order" "larger" "after" "inequality") :examples (list lang-ex-gt-basic) :tests (list lang-test-gt-equal lang-test-gt-float) :see-also (list lang-builtin-lt)))
+(define lang-builtin-gt (dict :symbol "lang-builtin-gt" :name "gt" :description "Greater than comparison. (gt a b). Returns true if a is strictly greater than b. Uses the same universal ordering as lt — all types comparable. Returns a boolean." :keywords (list "greater than" "compare" "order" "larger" "after" "inequality") :examples (list lang-ex-gt-basic) :tests (list lang-test-gt-equal lang-test-gt-float) :see-also (list (link 'lang-builtin-lt))))
 
 (define lang-builtins-comparison (dict :symbol "lang-builtins-comparison" :name "Comparison" :description "Builtins for ordering values. lt and gt use universal ordering — all types are comparable, enabling sort-by to work on any data. Numbers compare by value, strings lexicographically, and cross-type comparisons use a fixed type rank. The base library adds le, ge, and neq on top of these." :keywords (list "comparison" "ordering" "less than" "greater than" "sort" "rank" "inequality") :members (list lang-builtin-lt lang-builtin-gt)))
 
@@ -474,15 +468,11 @@
 
 (define lang-test-cons-head-rest (dict :name "cons is inverse of head/rest" :expr "(let (xs (list 1 2 3)) (eq (cons (head xs) (rest xs)) xs))"))
 
-(define lang-builtin-cons (dict :symbol "lang-builtin-cons" :name "cons" :description "Prepends an element to a list. (cons element list). Returns a new list with element as the first item followed by all elements of list. The fundamental list builder — cons is the inverse of head/rest decomposition." :keywords (list "prepend" "construct" "build list" "add front" "push" "cons cell") :examples (list lang-ex-cons-basic) :tests (list lang-test-cons-empty lang-test-cons-head-rest) :see-also (list lang-builtin-head lang-builtin-rest lang-type-list)))
-
 (define lang-ex-nth-basic (dict :name "access element by index" :expr "(eq (nth (list :a :b :c) 1) :b)"))
 
 (define lang-test-nth-zero (dict :name "index 0 is first element" :expr "(eq (nth (list 10 20 30) 0) 10)"))
 
 (define lang-test-nth-last (dict :name "access last element" :expr "(let (xs (list 1 2 3)) (eq (nth xs (sub (len xs) 1)) 3))"))
-
-(define lang-builtin-nth (dict :symbol "lang-builtin-nth" :name "nth" :description "Returns the element at a given index in a list. (nth list index). Zero-based indexing: (nth xs 0) is the first element. Out-of-bounds returns nil." :keywords (list "index" "element at" "position" "random access" "subscript" "offset") :examples (list lang-ex-nth-basic) :tests (list lang-test-nth-zero lang-test-nth-last) :see-also (list lang-builtin-head lang-type-list)))
 
 (define lang-ex-append-basic (dict :name "join two lists" :expr "(eq (append (list 1 2) (list 3 4)) (list 1 2 3 4))"))
 
@@ -490,7 +480,11 @@
 
 (define lang-test-append-both-empty (dict :name "append two empty lists" :expr "(eq (append (list) (list)) (list))"))
 
-(define lang-builtin-append (dict :symbol "lang-builtin-append" :name "append" :description "Joins two lists into one. (append list-a list-b). Returns a new list with all elements of list-a followed by all elements of list-b. Neither original list is modified." :keywords (list "join" "concatenate lists" "combine" "merge lists" "extend") :examples (list lang-ex-append-basic) :tests (list lang-test-append-empty lang-test-append-both-empty) :see-also (list lang-builtin-cons lang-type-list)))
+(define lang-builtin-cons (dict :symbol "lang-builtin-cons" :name "cons" :description "Prepends an element to a list. (cons element list). Returns a new list with element as the first item followed by all elements of list. The fundamental list builder — cons is the inverse of head/rest decomposition." :keywords (list "prepend" "construct" "build list" "add front" "push" "cons cell") :examples (list lang-ex-cons-basic) :tests (list lang-test-cons-empty lang-test-cons-head-rest) :see-also (list (link 'lang-builtin-head) (link 'lang-builtin-rest) (link 'lang-type-list))))
+
+(define lang-builtin-nth (dict :symbol "lang-builtin-nth" :name "nth" :description "Returns the element at a given index in a list. (nth list index). Zero-based indexing: (nth xs 0) is the first element. Out-of-bounds returns nil." :keywords (list "index" "element at" "position" "random access" "subscript" "offset") :examples (list lang-ex-nth-basic) :tests (list lang-test-nth-zero lang-test-nth-last) :see-also (list (link 'lang-builtin-head) (link 'lang-type-list))))
+
+(define lang-builtin-append (dict :symbol "lang-builtin-append" :name "append" :description "Joins two lists into one. (append list-a list-b). Returns a new list with all elements of list-a followed by all elements of list-b. Neither original list is modified." :keywords (list "join" "concatenate lists" "combine" "merge lists" "extend") :examples (list lang-ex-append-basic) :tests (list lang-test-append-empty lang-test-append-both-empty) :see-also (list (link 'lang-builtin-cons) (link 'lang-type-list))))
 
 (define lang-builtins-list (dict :symbol "lang-builtins-list" :name "List" :description "Builtins for building and accessing lists beyond the basics. cons prepends an element, nth provides random access by index, and append joins two lists. See also head, rest, and len in the Data category." :keywords (list "list operations" "prepend" "index" "join" "list building" "list access") :members (list lang-builtin-cons lang-builtin-nth lang-builtin-append)))
 
@@ -500,27 +494,27 @@
 
 (define lang-test-put-immutable (dict :name "put returns a new map, original unchanged" :expr "(let (m (dict :a 1)) (do (put m :b 2) (not (has? m :b))))"))
 
-(define lang-builtin-put (dict :symbol "lang-builtin-put" :name "put" :description "Adds or updates a key in a map. (put map key value). Returns a new map — the original is unchanged (maps are immutable). If the key already exists, its value is replaced." :keywords (list "set" "insert" "update" "add key" "map update" "assoc" "immutable") :examples (list lang-ex-put-add lang-ex-put-update) :tests (list lang-test-put-immutable) :see-also (list lang-builtin-get lang-builtin-dict lang-type-map)))
-
 (define lang-ex-has-basic (dict :name "check if a key exists" :expr "(and (has? (dict :a 1 :b 2) :a) (not (has? (dict :a 1) :c)))"))
 
 (define lang-test-has-nil-value (dict :name "has? detects keys with nil values" :expr "(has? (put (dict) :x nil) :x)"))
 
 (define lang-test-has-empty-map (dict :name "empty map has no keys" :expr "(not (has? (dict) :anything))"))
 
-(define lang-builtin-has (dict :symbol "lang-builtin-has" :name "has?" :description "Tests whether a map contains a key. (has? map key). Returns true if the key exists, false otherwise. Unlike get (which returns nil for missing keys), has? distinguishes between a missing key and a key with nil value." :keywords (list "contains" "key exists" "membership" "test key" "map lookup" "present") :examples (list lang-ex-has-basic) :tests (list lang-test-has-nil-value lang-test-has-empty-map) :see-also (list lang-builtin-get lang-type-map)))
+(define lang-builtin-put (dict :symbol "lang-builtin-put" :name "put" :description "Adds or updates a key in a map. (put map key value). Returns a new map — the original is unchanged (maps are immutable). If the key already exists, its value is replaced." :keywords (list "set" "insert" "update" "add key" "map update" "assoc" "immutable") :examples (list lang-ex-put-add lang-ex-put-update) :tests (list lang-test-put-immutable) :see-also (list (link 'lang-builtin-get) (link 'lang-builtin-dict) (link 'lang-type-map))))
+
+(define lang-builtin-has (dict :symbol "lang-builtin-has" :name "has?" :description "Tests whether a map contains a key. (has? map key). Returns true if the key exists, false otherwise. Unlike get (which returns nil for missing keys), has? distinguishes between a missing key and a key with nil value." :keywords (list "contains" "key exists" "membership" "test key" "map lookup" "present") :examples (list lang-ex-has-basic) :tests (list lang-test-has-nil-value lang-test-has-empty-map) :see-also (list (link 'lang-builtin-get) (link 'lang-type-map))))
 
 (define lang-builtins-map (dict :symbol "lang-builtins-map" :name "Map" :description "Builtins for updating and querying maps. put adds or updates keys (returning a new map), has? tests key existence. See also dict, get, keys, and len in the Data category. The base library adds dissoc and merge." :keywords (list "map operations" "update" "key existence" "associative" "immutable update") :members (list lang-builtin-put lang-builtin-has)))
 
 (define lang-ex-split-once-basic (dict :name "split string at first delimiter" :expr "(eq (split-once \",\" \"a,b,c\") (list \"a\" \"b,c\"))"))
 
-(define lang-ex-split-once-no-match (dict :name "no delimiter found returns whole string" :expr "(eq (split-once \",\" \"hello\") (list \"hello\" \"\"))"))
+(define lang-ex-split-once-no-match (dict :name "no delimiter found returns nil" :expr "(eq (split-once \",\" \"hello\") nil)"))
 
 (define lang-test-split-once-multi-char (dict :name "multi-character delimiter" :expr "(eq (split-once \"::\" \"a::b::c\") (list \"a\" \"b::c\"))"))
 
 (define lang-test-split-once-arg-order (dict :name "first arg is delimiter, second is string" :expr "(eq (head (split-once \"/\" \"path/to/file\")) \"path\")"))
 
-(define lang-builtin-split-once (dict :symbol "lang-builtin-split-once" :name "split-once" :description "Splits a string at the first occurrence of a delimiter. (split-once delimiter string). Returns a two-element list: the part before and the part after the delimiter. If the delimiter is not found, returns (list original-string \"\"). This is the sole string decomposition primitive in core — all higher-level string operations (split, contains?, replace, etc.) are built from split-once and concat in the base library. Note: argument order is (delimiter, string), not (string, delimiter)." :keywords (list "split" "string decompose" "tokenize" "parse" "delimiter" "substring" "primitive") :examples (list lang-ex-split-once-basic lang-ex-split-once-no-match) :tests (list lang-test-split-once-multi-char lang-test-split-once-arg-order) :see-also (list lang-builtin-concat lang-type-string)))
+(define lang-builtin-split-once (dict :symbol "lang-builtin-split-once" :name "split-once" :description "Splits a string at the first occurrence of a delimiter. (split-once delimiter string). Returns a two-element list: the part before and the part after the delimiter. If the delimiter is not found, returns (list original-string \"\"). This is the sole string decomposition primitive in core — all higher-level string operations (split, contains?, replace, etc.) are built from split-once and concat in the base library. Note: argument order is (delimiter, string), not (string, delimiter)." :keywords (list "split" "string decompose" "tokenize" "parse" "delimiter" "substring" "primitive") :examples (list lang-ex-split-once-basic lang-ex-split-once-no-match) :tests (list lang-test-split-once-multi-char lang-test-split-once-arg-order) :see-also (list (link 'lang-builtin-concat) (link 'lang-type-string))))
 
 (define lang-builtins-string (dict :symbol "lang-builtins-string" :name "String" :description "The sole string decomposition builtin. Logos strings are encoding-agnostic — no positional indexing, no len on strings. split-once is the primitive; higher-level operations (split, join, replace, contains?, starts-with?, ends-with?) are built from it in the base library." :keywords (list "string" "text" "parse" "tokenize" "decompose" "encoding-agnostic") :members (list lang-builtin-split-once)))
 
@@ -528,13 +522,13 @@
 
 (define lang-test-to-json-roundtrip (dict :name "JSON roundtrip preserves data" :expr "(let (data (dict :x 42 :y (list 1 2 3))) (eq (from-json (to-json data)) data))"))
 
-(define lang-builtin-to-json (dict :symbol "lang-builtin-to-json" :name "to-json" :description "Serializes a logos value to a JSON string. (to-json value). Maps become JSON objects, lists become JSON arrays, strings/numbers/bools/nil map directly. Used for module communication and HTTP responses." :keywords (list "serialize" "JSON" "encode" "marshal" "format" "API" "interchange") :examples (list lang-ex-to-json-basic) :tests (list lang-test-to-json-roundtrip) :see-also (list lang-builtin-from-json)))
-
 (define lang-ex-from-json-basic (dict :name "parse JSON string to logos data" :expr "(eq (from-json \"{\\\"a\\\":1}\") (dict \"a\" 1))"))
 
 (define lang-test-from-json-array (dict :name "JSON array becomes logos list" :expr "(eq (from-json \"[1,2,3]\") (list 1 2 3))"))
 
-(define lang-builtin-from-json (dict :symbol "lang-builtin-from-json" :name "from-json" :description "Parses a JSON string into logos data. (from-json json-string). JSON objects become maps (with string keys), arrays become lists, strings/numbers/bools/null map to their logos equivalents. Used for processing module responses and HTTP request bodies." :keywords (list "parse" "JSON" "decode" "unmarshal" "deserialize" "API" "interchange") :examples (list lang-ex-from-json-basic) :tests (list lang-test-from-json-array) :see-also (list lang-builtin-to-json)))
+(define lang-builtin-to-json (dict :symbol "lang-builtin-to-json" :name "to-json" :description "Serializes a logos value to a JSON string. (to-json value). Maps become JSON objects, lists become JSON arrays, strings/numbers/bools/nil map directly. Used for module communication and HTTP responses." :keywords (list "serialize" "JSON" "encode" "marshal" "format" "API" "interchange") :examples (list lang-ex-to-json-basic) :tests (list lang-test-to-json-roundtrip) :see-also (list (link 'lang-builtin-from-json))))
+
+(define lang-builtin-from-json (dict :symbol "lang-builtin-from-json" :name "from-json" :description "Parses a JSON string into logos data. (from-json json-string). JSON objects become maps (with string keys), arrays become lists, strings/numbers/bools/null map to their logos equivalents. Used for processing module responses and HTTP request bodies." :keywords (list "parse" "JSON" "decode" "unmarshal" "deserialize" "API" "interchange") :examples (list lang-ex-from-json-basic) :tests (list lang-test-from-json-array) :see-also (list (link 'lang-builtin-to-json))))
 
 (define lang-builtins-json (dict :symbol "lang-builtins-json" :name "JSON" :description "Builtins for JSON serialization and deserialization. to-json converts logos values to JSON strings, from-json parses JSON strings back into logos data. Essential for module communication (all module messages are JSON) and HTTP request/response handling." :keywords (list "JSON" "serialization" "deserialization" "encode" "decode" "interchange" "module communication") :members (list lang-builtin-to-json lang-builtin-from-json)))
 
@@ -542,11 +536,11 @@
 
 (define lang-ex-type-collections (dict :name "type for collections and functions" :expr "(and (eq (type (list)) :list) (and (eq (type (dict)) :map) (eq (type add) :builtin)))"))
 
-(define lang-test-type-all-13 (dict :name "all 13 types are distinguishable" :expr "(eq (len (list :int :float :bool :string :keyword :symbol :node-ref :nil :list :map :fn :form :builtin)) 13)"))
+(define lang-test-type-all-14 (dict :name "all 14 types are distinguishable" :expr "(eq (len (list :int :float :bool :string :keyword :symbol :node-ref :link :nil :list :map :fn :form :builtin)) 14)"))
 
 (define lang-test-type-fn-vs-builtin (dict :name "fn and builtin are distinct types" :expr "(and (eq (type (fn (x) x)) :fn) (eq (type add) :builtin))"))
 
-(define lang-builtin-type (dict :symbol "lang-builtin-type" :name "type" :description "Returns the type of a value as a keyword. (type value). Returns one of 13 keywords: :int, :float, :bool, :string, :keyword, :symbol, :node-ref, :nil, :list, :map, :fn, :form, :builtin. The foundation for type dispatch and runtime type checking. The base library provides type predicate functions (int?, string?, list?, etc.) built on top of type." :keywords (list "type check" "type of" "runtime type" "introspection" "reflection" "dispatch" "predicate") :examples (list lang-ex-type-basic lang-ex-type-collections) :tests (list lang-test-type-all-13 lang-test-type-fn-vs-builtin) :see-also (list lang-type-builtin)))
+(define lang-builtin-type (dict :symbol "lang-builtin-type" :name "type" :description "Returns the type of a value as a keyword. (type value). Returns one of 14 keywords: :int, :float, :bool, :string, :keyword, :symbol, :node-ref, :link, :nil, :list, :map, :fn, :form, :builtin. The foundation for type dispatch and runtime type checking. The base library provides type predicate functions (int?, string?, list?, etc.) built on top of type." :keywords (list "type check" "type of" "runtime type" "introspection" "reflection" "dispatch" "predicate") :examples (list lang-ex-type-basic lang-ex-type-collections) :tests (list lang-test-type-all-14 lang-test-type-fn-vs-builtin) :see-also (list (link 'lang-type-builtin))))
 
 (define lang-builtins-type (dict :symbol "lang-builtins-type" :name "Type" :description "The type introspection builtin. Returns a keyword identifying any value's type, enabling runtime type dispatch and checking." :keywords (list "type" "introspection" "reflection" "runtime" "dispatch") :members (list lang-builtin-type)))
 
@@ -554,21 +548,37 @@
 
 (define lang-test-symbols-node-refs (dict :name "values in symbols map are node-refs" :expr "(eq (type (get (symbols) \"fold\")) :node-ref)"))
 
-(define lang-builtin-symbols (dict :symbol "lang-builtin-symbols" :name "symbols" :description "Returns a map of all currently defined symbols. (symbols). Keys are symbol name strings, values are node-refs pointing to each symbol's current graph node. This is the entry point for graph introspection — from here you can get any symbol's node-ref and use node-expr or ref-by on it." :keywords (list "symbol table" "all symbols" "graph" "introspection" "registry" "namespace" "defined") :examples (list lang-ex-symbols-basic) :tests (list lang-test-symbols-node-refs) :see-also (list lang-type-node-ref lang-builtin-node-expr)))
-
 (define lang-ex-node-expr-basic (dict :name "inspect a node's AST" :expr "(list? (node-expr (get (symbols) \"fold\")))"))
 
 (define lang-test-node-expr-homoiconic (dict :name "AST is logos data (homoiconic)" :expr "(let (ast (node-expr (get (symbols) \"not\"))) (and (list? ast) (eq (type (head ast)) :symbol)))"))
 
-(define lang-builtin-node-expr (dict :symbol "lang-builtin-node-expr" :name "node-expr" :description "Returns the AST of a graph node as logos data. (node-expr node-ref). The AST is homoiconic — lists, symbols, node-refs, and literals are returned as logos values. This enables metaprogramming: inspecting how any function or data node was defined. Accepts both symbol names and node-refs." :keywords (list "AST" "source" "inspect" "homoiconic" "metaprogramming" "expression" "definition" "graph node") :examples (list lang-ex-node-expr-basic) :tests (list lang-test-node-expr-homoiconic) :see-also (list lang-builtin-symbols lang-type-node-ref)))
-
 (define lang-ex-ref-by-basic (dict :name "find symbols that reference a given symbol" :expr "(list? (ref-by \"not\"))"))
 
-(define lang-test-ref-by-returns-symbols (dict :name "ref-by returns a list of symbol names" :expr "(let (refs (ref-by \"eq\")) (and (list? refs) (if (gt (len refs) 0) (eq (type (head refs)) :string) true)))"))
+(define lang-test-ref-by-returns-symbols (dict :name "ref-by returns a list of symbol names" :expr "(let (refs (ref-by \"not\")) (and (list? refs) (gt (len refs) 0)))"))
 
-(define lang-builtin-ref-by (dict :symbol "lang-builtin-ref-by" :name "ref-by" :description "Returns a list of symbol names whose current node references the given symbol or node-ref. (ref-by name-or-ref). The inverse of graph dependency — shows who depends on a symbol. Used for impact analysis: before changing a function, see what will be affected. The base library's dependents and downstream functions build transitive dependency trees on top of ref-by." :keywords (list "referenced by" "dependents" "reverse dependency" "who uses" "impact" "graph query" "dependency") :examples (list lang-ex-ref-by-basic) :tests (list lang-test-ref-by-returns-symbols) :see-also (list lang-builtin-symbols lang-builtin-node-expr)))
+(define lang-builtin-symbols (dict :symbol "lang-builtin-symbols" :name "symbols" :description "Returns a map of all currently defined symbols. (symbols). Keys are symbol name strings, values are node-refs pointing to each symbol's current graph node. This is the entry point for graph introspection — from here you can get any symbol's node-ref and use node-expr or ref-by on it." :keywords (list "symbol table" "all symbols" "graph" "introspection" "registry" "namespace" "defined") :examples (list lang-ex-symbols-basic) :tests (list lang-test-symbols-node-refs) :see-also (list (link 'lang-type-node-ref) (link 'lang-builtin-node-expr))))
+
+(define lang-builtin-node-expr (dict :symbol "lang-builtin-node-expr" :name "node-expr" :description "Returns the AST of a graph node as logos data. (node-expr node-ref). The AST is homoiconic — lists, symbols, node-refs, and literals are returned as logos values. This enables metaprogramming: inspecting how any function or data node was defined. Accepts both symbol names and node-refs." :keywords (list "AST" "source" "inspect" "homoiconic" "metaprogramming" "expression" "definition" "graph node") :examples (list lang-ex-node-expr-basic) :tests (list lang-test-node-expr-homoiconic) :see-also (list (link 'lang-builtin-symbols) (link 'lang-type-node-ref))))
+
+(define lang-builtin-ref-by (dict :symbol "lang-builtin-ref-by" :name "ref-by" :description "Returns a list of symbol names whose current node references the given symbol or node-ref. (ref-by name-or-ref). The inverse of graph dependency — shows who depends on a symbol. Used for impact analysis: before changing a function, see what will be affected. The base library's dependents and downstream functions build transitive dependency trees on top of ref-by." :keywords (list "referenced by" "dependents" "reverse dependency" "who uses" "impact" "graph query" "dependency") :examples (list lang-ex-ref-by-basic) :tests (list lang-test-ref-by-returns-symbols) :see-also (list (link 'lang-builtin-symbols) (link 'lang-builtin-node-expr))))
 
 (define lang-builtins-graph (dict :symbol "lang-builtins-graph" :name "Graph" :description "Builtins for inspecting the graph — the dependency-tracked symbol table at the heart of logos. symbols lists all defined names, node-expr reveals a node's AST as logos data (homoiconic), and ref-by shows reverse dependencies. The base library builds higher-level tools (describe, dependents, downstream, search-source) on top of these primitives." :keywords (list "graph" "introspection" "dependency" "symbol table" "AST" "metaprogramming" "reflection") :members (list lang-builtin-symbols lang-builtin-node-expr lang-builtin-ref-by)))
+
+(define lang-ex-link-basic (dict :name "create a link from a symbol name" :expr "(eq (type (link 'fold)) :link)"))
+
+(define lang-ex-link-no-resolve (dict :name "link stores the name without resolving" :expr "(eq (link 'nonexistent) (link 'nonexistent))"))
+
+(define lang-test-link-to-string (dict :name "link has a readable string form" :expr "(eq (to-string (link 'foo)) \"<link:foo>\")"))
+
+(define lang-ex-follow-basic (dict :name "follow dereferences a link to its current value" :expr "(eq (type (follow (link 'not))) :fn)"))
+
+(define lang-test-follow-dynamic (dict :name "follow always gets the current definition" :expr "(let (lnk (link 'not)) (eq (type (follow lnk)) :fn))"))
+
+(define lang-builtin-link (dict :symbol "lang-builtin-link" :name "link" :description "Creates a link value from a symbol. (link 'name). A link stores a symbol name without resolving it — the symbol does not need to exist. Links are inert pointers: they carry no dependency, trigger no evaluation, and are invisible to refresh-all. Use follow to dereference a link to the symbol's current value. Primary use case: cross-references in knowledge graphs (see-also fields) where direct graph references would create cycles or ordering constraints." :keywords (list "link" "indirection" "pointer" "lazy reference" "deferred" "cross-reference" "knowledge graph") :examples (list lang-ex-link-basic lang-ex-link-no-resolve) :tests (list lang-test-link-to-string) :see-also (list (link 'lang-builtin-follow) (link 'lang-type-link))))
+
+(define lang-builtin-follow (dict :symbol "lang-builtin-follow" :name "follow" :description "Dereferences a link to the symbol's current value. (follow link-value). Looks up the symbol name stored in the link and evaluates its current graph node. This is the explicit resolution mechanism — unlike direct graph references which resolve at define time, follow resolves at call time, always getting the latest definition." :keywords (list "dereference" "resolve" "follow link" "lookup" "dynamic" "late binding" "indirection") :examples (list lang-ex-follow-basic) :tests (list lang-test-follow-dynamic) :see-also (list (link 'lang-builtin-link) (link 'lang-type-link))))
+
+(define lang-builtins-indirection (dict :symbol "lang-builtins-indirection" :name "Indirection" :description "Builtins for explicit symbol indirection. link creates an inert pointer to a symbol name (no resolution, no dependency tracking). follow dereferences a link to the symbol's current value at call time. Together they enable late binding and cross-references in knowledge graphs without creating cycles or ordering constraints in the dependency graph." :keywords (list "indirection" "link" "follow" "late binding" "dynamic reference" "pointer" "knowledge graph") :members (list lang-builtin-link lang-builtin-follow)))
 
 (define lang-ex-assert-pass (dict :name "assert passes when condition is truthy" :expr "(eq (assert (eq 1 1) \"math works\") true)"))
 
@@ -576,21 +586,29 @@
 
 (define lang-test-assert-truthy-values (dict :name "assert accepts any truthy value" :expr "(and (eq (assert 1 \"int\") true) (eq (assert \"yes\" \"string\") true))"))
 
-(define lang-builtin-assert (dict :symbol "lang-builtin-assert" :name "assert" :description "Asserts a condition is truthy. (assert condition message). Returns true if the condition is truthy. If falsy, raises an error with the message and serializes the full eval trace — every function call, every module send — into the error payload. This makes assert failures self-diagnosing: the trace shows exactly what happened leading to the failure." :keywords (list "assert" "check" "verify" "test" "invariant" "guard" "validation" "trace" "diagnostic") :examples (list lang-ex-assert-pass) :tests (list lang-test-assert-returns-true lang-test-assert-truthy-values) :see-also (list lang-concept-truthy)))
-
 (define lang-ex-traces-basic (dict :name "traces returns the eval trace log" :expr "(eq (type (traces)) :list)"))
 
 (define lang-test-traces-entries-are-maps (dict :name "trace entries are maps" :expr "(do (add 1 1) (eq (type (head (traces))) :map))"))
 
-(define lang-builtin-traces (dict :symbol "lang-builtin-traces" :name "traces" :description "Returns the eval trace log as a list of maps. (traces). Each entry records an evaluation: the entry node, arguments, result, and any module sends. Traces are ephemeral (in-memory, not logged) and reset on clear. Use (head (traces)) to get the most recent trace entry. The base library's explain-trace and debug library's replay/trace-expand provide higher-level trace analysis." :keywords (list "trace" "log" "debug" "history" "eval log" "diagnostic" "profiling" "ephemeral") :examples (list lang-ex-traces-basic) :tests (list lang-test-traces-entries-are-maps) :see-also (list lang-builtin-assert)))
+(define lang-builtin-assert (dict :symbol "lang-builtin-assert" :name "assert" :description "Asserts a condition is truthy. (assert condition message). Returns true if the condition is truthy. If falsy, raises an error with the message and serializes the full eval trace — every function call, every module send — into the error payload. This makes assert failures self-diagnosing: the trace shows exactly what happened leading to the failure." :keywords (list "assert" "check" "verify" "test" "invariant" "guard" "validation" "trace" "diagnostic") :examples (list lang-ex-assert-pass) :tests (list lang-test-assert-returns-true lang-test-assert-truthy-values) :see-also (list (link 'lang-concept-truthy) (link 'lang-builtin-traces))))
+
+(define lang-builtin-traces (dict :symbol "lang-builtin-traces" :name "traces" :description "Returns the eval trace log as a list of maps. (traces). Each entry records an evaluation: the entry node, arguments, result, and any module sends. Traces are ephemeral (in-memory, not logged) and reset on clear. Use (head (traces)) to get the most recent trace entry. The base library's explain-trace and debug library's replay/trace-expand provide higher-level trace analysis." :keywords (list "trace" "log" "debug" "history" "eval log" "diagnostic" "profiling" "ephemeral") :examples (list lang-ex-traces-basic) :tests (list lang-test-traces-entries-are-maps) :see-also (list (link 'lang-builtin-assert))))
 
 (define lang-builtins-trace (dict :symbol "lang-builtins-trace" :name "Trace" :description "Builtins for always-on eval tracing. assert validates conditions and serializes the full trace on failure (self-diagnosing errors). traces returns the ephemeral in-memory trace log for inspection. Together they form the runtime diagnostic system — no separate test runner or debugger needed." :keywords (list "trace" "assert" "diagnostic" "debug" "runtime" "validation" "error analysis") :members (list lang-builtin-assert lang-builtin-traces)))
 
-(define lang-builtins (dict :symbol "lang-builtins" :name "Builtins" :description "The 31 builtins are Go-implemented functions exposed to logos. Unlike core forms (which control evaluation), builtins receive already-evaluated arguments. They are first-class values — passable to map, fold, apply, and storable in data structures. Grouped into 10 categories: Data (10), Arithmetic (5), Comparison (2), List (3), Map (2), String (1), JSON (2), Type (1), Graph (3), and Trace (2)." :keywords (list "builtins" "native" "primitive" "Go functions" "first-class" "eager" "operations" "standard library") :members (list lang-builtins-data lang-builtins-arithmetic lang-builtins-comparison lang-builtins-list lang-builtins-map lang-builtins-string lang-builtins-json lang-builtins-type lang-builtins-graph lang-builtins-trace)))
+(define lang-ex-step-eval-basic (dict :name "create a step evaluator state" :expr "(let (state (step-eval \"(add 1 2)\")) (eq (type state) :map))"))
 
-(define lang (dict :symbol "lang" :name "Logos Language Reference" :description "Self-validating language reference for the logos programming environment." :members (list lang-types lang-forms lang-builtins)))
+(define lang-test-step-eval-initial-status (dict :name "initial state has status :evaluating" :expr "(eq (get (step-eval \"(add 1 2)\") :status) :evaluating)"))
 
-(define lang (dict :symbol "lang" :name "Logos Language Reference" :description "Self-validating language reference for the logos programming environment." :members (list lang-types lang-forms lang-builtins)))
+(define lang-ex-step-continue-basic (dict :name "advance evaluation by one step" :expr "(let (s0 (step-eval \"(add 1 2)\") s1 (step-continue s0)) (eq (type s1) :map))"))
 
-(define lang-builtins (dict :symbol "lang-builtins" :name "Builtins" :description "The 31 builtins are Go-implemented functions exposed to logos. Unlike core forms (which control evaluation), builtins receive already-evaluated arguments. They are first-class values — passable to map, fold, apply, and storable in data structures. Grouped into 10 categories: Data (10), Arithmetic (5), Comparison (2), List (3), Map (2), String (1), JSON (2), Type (1), Graph (3), and Trace (2)." :keywords (list "builtins" "native" "primitive" "Go functions" "first-class" "eager" "operations" "standard library") :members (list lang-builtins-data lang-builtins-arithmetic lang-builtins-comparison lang-builtins-list lang-builtins-map lang-builtins-string lang-builtins-json lang-builtins-type lang-builtins-graph lang-builtins-trace)))
+(define lang-test-step-continue-to-done (dict :name "stepping to completion yields result" :expr "(let (state (run-to-end (step-eval \"(add 1 2)\"))) (and (eq (get state :status) :done) (eq (get state :result) 3)))"))
+
+(define lang-builtin-step-eval (dict :symbol "lang-builtin-step-eval" :name "step-eval" :description "Creates a step evaluator state from an expression string. (step-eval expr-string). Returns a map with :status :pending and internal evaluator state. Use step-continue to advance one step at a time, or run-to-end (from the debug library) to evaluate to completion. Graph-defined symbols are resolved before evaluation begins. The step evaluator enables programmatic eval of arbitrary expressions — used by lang-run-test for test validation." :keywords (list "step" "debug" "evaluate" "parse" "programmatic eval" "interpreter" "controlled execution") :examples (list lang-ex-step-eval-basic) :tests (list lang-test-step-eval-initial-status) :see-also (list (link 'lang-builtin-step-continue))))
+
+(define lang-builtin-step-continue (dict :symbol "lang-builtin-step-continue" :name "step-continue" :description "Advances a step evaluator state by one evaluation step. (step-continue state). Returns a new state map. When :status becomes :done, the :result field holds the final value. When :status becomes :error, the :error field holds the error message. Each step corresponds to one frame of the iterative evaluator — function calls, let bindings, if branches, etc." :keywords (list "step" "continue" "advance" "debug" "single step" "next" "evaluator") :examples (list lang-ex-step-continue-basic) :tests (list lang-test-step-continue-to-done) :see-also (list (link 'lang-builtin-step-eval))))
+
+(define lang-builtins-step (dict :symbol "lang-builtins-step" :name "Step Debugger" :description "Builtins for controlled, step-by-step evaluation. step-eval creates an evaluator state from an expression string, step-continue advances it one step. Together they enable programmatic evaluation (used by lang-run-test for validation) and interactive debugging (the debug library builds step-n, step-until, step-watch, and run-to-end on top of these primitives)." :keywords (list "debugger" "step" "controlled eval" "single step" "interactive" "programmatic eval") :members (list lang-builtin-step-eval lang-builtin-step-continue)))
+
+(define lang-builtins (dict :symbol "lang-builtins" :name "Builtins" :description "The 35 builtins are Go-implemented functions exposed to logos. Unlike core forms (which control evaluation), builtins receive already-evaluated arguments. They are first-class values — passable to map, fold, apply, and storable in data structures. Grouped into 12 categories: Data (12), Arithmetic (5), Comparison (2), List (3), Map (2), String (1), JSON (2), Type (1), Graph (3), Indirection (2), Trace (2), and Step Debugger (2)." :keywords (list "builtins" "native" "primitive" "Go functions" "first-class" "eager" "operations" "standard library") :members (list lang-builtins-data lang-builtins-arithmetic lang-builtins-comparison lang-builtins-list lang-builtins-map lang-builtins-string lang-builtins-json lang-builtins-type lang-builtins-graph lang-builtins-indirection lang-builtins-trace lang-builtins-step)))
 

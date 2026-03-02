@@ -47,10 +47,10 @@ This works but is heavyweight — spinning up the step evaluator just to derefer
 
 ## Still To Build (lang library)
 
-- ~~**Core forms** section~~ ✓ — 9 forms, 38 tests, all passing
-- **Builtins** section — 31 builtins defined across 10 categories, **awaiting final validation** (blocked by stack overflow — see `resolver-stack-overflow.md`)
+- ~~**Core forms** section~~ ✓ — 10 forms (added loop, recur; removed letrec), 41 tests
+- ~~**Builtins** section~~ ✓ — 35 builtins across 12 categories (added Indirection and Step Debugger), 110 tests. Uses `(link 'symbol)` for all see-also cross-references.
 - **Syntax** section: S-expressions, quote reader macro, keyword syntax, rest params
-- **Concepts** section: closures, recursion, TCO, scoping, graph resolution
+- **Concepts** section: closures, scoping, graph resolution, define-time symbol resolution, loop/recur iteration, link/follow indirection
 
 ## Still To Build (other libraries)
 
@@ -78,6 +78,36 @@ An early version stored member/example/test lists as symbol name strings (e.g., 
 **Tradeoff:** After redefining a child node, you must `refresh-all` to update parents. With strings, parents always resolved to current. The refresh discipline is a feature — it makes change propagation explicit.
 
 **Future:** Refreshes could become more ergonomic. For instance, some symbols could auto-refresh with test functions as guard rails — redefine a node, its dependents refresh, and associated tests run automatically as validation.
+
+## Observations from Building the Builtins Section (v3 / post-2.13)
+
+### 1. Two tiers of graph references
+The lang library now uses a clear pattern for two kinds of references:
+- **Direct refs** for structural/tree relationships (`members`, `examples`, `tests`) — tracked by the graph, participate in `refresh-all`, define the traversal tree for `lang-validate` and `lang-describe`.
+- **Links** for cross-references (`see-also`) — inert `ValLink` values created with `(link 'symbol-name)`. No ordering constraints, no cycles, no dependency tracking. Followed programmatically with `follow` when needed.
+
+This was the whole reason `link`/`follow` were added to the core in Phase 2.13. Direct refs in `see-also` would require careful define ordering (the referenced node must exist) and create cycles in the dependency graph (A see-also B, B see-also A). Links sidestep both problems — `(link 'nonexistent)` works fine, the name is just stored as a string.
+
+### 2. refresh-all doesn't propagate reliably through deep chains
+When fixing leaf nodes (test expressions) and calling `refresh-all` with those leaves as targets, intermediate containers can remain stale. The refresh processes the dependency graph, but the order within a single pass can leave a parent refreshed before its child, so the parent picks up the old child node-ref.
+
+**Workaround:** After fixing leaves, redefine the containers bottom-up explicitly rather than relying on refresh to propagate. Define the immediate parent, then its parent, etc. This is wasteful but reliable.
+
+**Root cause:** `refresh-all` re-resolves each dependent's stored expression. But if multiple levels need refreshing, the resolution of an outer node may happen before its inner dependency has been re-resolved in the same pass. This is a different manifestation of the ordering problem documented in Programming Ergonomics.
+
+### 3. Test assertions that didn't match runtime
+Several test expressions from the pre-2.13 backup were wrong for the current runtime:
+- `(rest (list))` returns empty list `[]`, not `nil`
+- `(concat)` with no args errors ("expected at least 1 arg") — not zero-arity
+- `(split-once "," "hello")` returns `nil` when delimiter not found, not `(list "hello" "")`
+- `(ref-by "not")` returns symbols (type `:symbol`), not strings
+- `(step-eval expr)` initial status is `:evaluating`, not `:pending`
+- `(to-string (link 'foo))` returns `"<link:foo>"` with angle brackets
+
+These were caught by `lang-validate` after defining the builtins. The self-validating library design works as intended — wrong assumptions surface immediately.
+
+### 4. Final stats
+222 tests total (112 types+forms + 110 builtins), 35 builtins across 12 categories. Two new categories vs. the pre-2.13 version: Indirection (link, follow) and Step Debugger (step-eval, step-continue). Type count updated from 13 to 14 (added `:link`).
 
 ## Observations from Building the Web UI
 
@@ -115,19 +145,17 @@ A target in `refresh-all` means "I am already correct — re-resolve things that
 ### 3. `see-also` cross-references
 Established a convention for explicit semantic links between related nodes. Three form→type links: `lang-form-fn` → `lang-type-fn`, `lang-form-form` → `lang-type-form`, `lang-form-quote` → `lang-type-symbol`. These are real graph references visible to `ref-by`, `dependents`, `downstream`.
 
-## Blocker: Resolver Stack Overflow
+## Resolved: Resolver Stack Overflow
 
-Evaluating `lang-builtins` (or `lang` which includes it) causes a **Go stack overflow** — 1GB goroutine stack exhausted, 1.4M frames elided. The root cause is infinite recursion in the resolver's eval-on-access pattern. Full analysis in `resolver-stack-overflow.md`. This blocks `(lang-validate lang-builtins)` and must be fixed before the builtins section is complete.
+The stack overflow was caused by infinite recursion in the resolver's eval-on-access pattern. **Fixed in Phase 2.13** by removing the resolver entirely. All symbols are now resolved at define time. The evaluator never consults the symbol table. `loop`/`recur` replaces recursion.
 
-**Workaround options** (if fixing the root cause is deferred):
-- Remove `see-also` node-refs from builtin nodes (or replace with inert strings)
-- Validate each category independently: `(lang-validate lang-builtins-data)` etc.
+The existing lang library nodes (types, forms, builtins) were built under the old runtime and need to be rebuilt. The library functions (`lang-validate`, `lang-describe`, `lang-search`, etc.) used recursive patterns that must be rewritten with `loop`/`recur`.
 
 ## Enhancements (after lang library is complete)
 
 - **Case-insensitive search**: `contains?` is case-sensitive. `lang-search` relies on lowercase keywords to partially cover this, but searching "arithmetic" won't match description text "Arithmetic builtins...". Fix: add a `lower-case` string builtin in Go, then lowercase both query and fields in `lang-search-matches?`.
-- **`eval` or `resolve` builtin**: `lang-eval-symbol` uses `step-eval` to go from symbol name to value — heavyweight. A simple builtin would make the graph-as-data-store pattern much more ergonomic and reduce fuel cost of search/validate. Also needed at API boundaries (HTTP query params → node values).
-- **Variadic `and`/`or`**: binary forms require nesting. Rest params + recursive expansion would fix this.
+- **`eval` or `resolve` builtin**: `lang-eval-symbol` uses `step-eval` to go from symbol name to value — heavyweight. The `link`/`follow` builtins (added in 2.13) address the common case — `(follow (link 'name))` evaluates a symbol by name. A general-purpose `eval` builtin for arbitrary expressions would still be useful.
+- **Variadic `and`/`or`**: now supported via rest params + short-circuit forms (done in 2.10).
 - **Generalize `lang-describe`**: not specific to lang nodes. Any node following the name/description/examples/tests/members convention could use it. Maybe belongs in a shared utility space.
 - **Fuel**: `lang-validate lang-types` needs ~500K fuel for 68 tests via step-eval. Will grow as more sections are added.
 - **Stale dependent reporting on define**: include `ref-by` results for the superseded node in the define response, so the caller knows what needs refreshing.

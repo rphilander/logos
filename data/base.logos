@@ -18,39 +18,61 @@
 
 (define node-ref? (fn (x) (eq (type x) :node-ref)))
 
-(define number? (fn (x) (or (eq (type x) :int) (eq (type x) :float))))
-
 (define inc (fn (x) (add x 1)))
 
 (define dec (fn (x) (sub x 1)))
 
 (define identity (fn (x) x))
 
-(define dependents (fn (sym) (ref-by sym)))
-
-(define describe (fn (sym) (let (nref (get (symbols) (to-string sym)) src (node-expr sym) deps (ref-by sym)) (dict "name" (to-string sym) "node-id" (to-string nref) "source" (to-string src) "dependents" deps))))
-
 (define constantly (fn (v) (fn (x) v)))
 
 (define comp (fn (f g) (fn (x) (f (g x)))))
 
-(define contains? (fn (s sub) (not (nil? (split-once sub s)))))
+(define not (fn (x) (if x false true)))
 
-(define search-source (fn (term) (let (syms (symbols) names (keys syms)) (filter (fn (name) (let (nref (get syms name) src (to-string (node-expr (get syms name)))) (contains? src term))) names))))
+(define nil? (fn (x) (eq (type x) :nil)))
 
-(define explain-trace (fn (t) (let (entry (get t "entry") err (get t "error") result (get t "result") sends (get t "sends") ts (get t "timestamp")) (dict "entry" entry "timestamp" ts "outcome" (if (nil? err) (to-string result) (concat "ERROR: " err)) "sends" (map (fn (s) (dict "module" (get s "module") "request" (to-string (get s "request")) "response" (to-string (get s "response")))) sends)))))
+(define empty? (fn (xs) (eq (len xs) 0)))
 
-(define collect-refs (fn (ast) (if (node-ref? ast) (list ast) (if (list? ast) (fold (fn (acc x) (append acc (collect-refs x))) (list) ast) (list)))))
+(define and (form (a b) (list (quote if) a b false)))
 
-(define dep-tree (fn (sym) (let (refs (uniq (collect-refs (node-expr sym)))) (map (fn (ref) (let (name (to-string ref) children (uniq (collect-refs (node-expr ref)))) (if (empty? children) (dict "name" name) (dict "name" name "deps" (map (fn (child) (dep-tree child)) children))))) refs))))
+(define or (form (a b) (list (quote let) (list (quote __or-val__) a) (list (quote if) (quote __or-val__) (quote __or-val__) b))))
+
+(define when (form (test body) (list (quote if) test body nil)))
+
+(define unless (form (test body) (list (quote if) test nil body)))
 
 (define fold (fn (f acc xs) (loop ((acc acc) (xs xs)) (if (empty? xs) acc (recur (f acc (head xs)) (rest xs))))))
+
+(define reverse (fn (xs) (fold (fn (acc x) (cons x acc)) (list) xs)))
+
+(define cond (form (& pairs) (let (rev (reverse pairs) expanded (loop ((ps rev) (result (quote nil))) (if (empty? ps) result (recur (rest (rest ps)) (list (quote if) (nth ps 1) (head ps) result))))) expanded)))
+
+(define case (form (target & clauses) (let (rev (reverse clauses) has-default (eq (mod (len clauses) 2) 1) start-result (if has-default (head rev) (quote nil)) start-cs (if has-default (rest rev) rev) expanded (loop ((cs start-cs) (result start-result)) (if (empty? cs) result (recur (rest (rest cs)) (list (quote if) (list (quote eq) (quote __case-target__) (nth cs 1)) (head cs) result))))) (list (quote let) (list (quote __case-target__) target) expanded))))
+
+(define number? (fn (x) (or (eq (type x) :int) (eq (type x) :float))))
+
+(define neq (fn (a b) (not (eq a b))))
+
+(define le (fn (a b) (or (lt a b) (eq a b))))
+
+(define ge (fn (a b) (or (gt a b) (eq a b))))
 
 (define map (fn (f xs) (loop ((acc (list)) (xs xs)) (if (empty? xs) (reverse acc) (recur (cons (f (head xs)) acc) (rest xs))))))
 
 (define filter (fn (f xs) (loop ((acc (list)) (xs xs)) (if (empty? xs) (reverse acc) (if (f (head xs)) (recur (cons (head xs) acc) (rest xs)) (recur acc (rest xs)))))))
 
 (define group-by (fn (f xs) (fold (fn (acc x) (let (k (to-string (f x)) existing (get acc k)) (put acc k (if (nil? existing) (list x) (append existing (list x)))))) (dict) xs)))
+
+(define member? (fn (xs x) (loop ((xs xs)) (if (empty? xs) false (if (eq (head xs) x) true (recur (rest xs)))))))
+
+(define uniq (fn (xs) (if (empty? xs) (list) (let (sorted (sort-by identity xs)) (reverse (fold (fn (acc x) (if (eq (head acc) x) acc (cons x acc))) (list (head sorted)) (rest sorted)))))))
+
+(define dissoc (fn (m k) (fold (fn (acc key) (if (eq key k) acc (put acc key (get m key)))) (dict) (keys m))))
+
+(define merge (fn (m1 m2) (fold (fn (acc k) (put acc k (get m2 k))) m1 (keys m2))))
+
+(define contains? (fn (s sub) (not (nil? (split-once sub s)))))
 
 (define starts-with? (fn (s prefix) (let (r (split-once prefix s)) (if (nil? r) false (eq (head r) "")))))
 
@@ -62,36 +84,14 @@
 
 (define join (fn (sep xs) (if (empty? xs) "" (fold (fn (acc x) (concat acc sep x)) (head xs) (rest xs)))))
 
-(define not (fn (x) (if x false true)))
+(define dependents (fn (sym) (ref-by sym)))
 
-(define and (form (a b) (list (quote if) a b false)))
+(define describe (fn (sym) (let (nref (get (symbols) (to-string sym)) src (node-expr sym) deps (ref-by sym)) (dict "name" (to-string sym) "node-id" (to-string nref) "source" (to-string src) "dependents" deps))))
 
-(define or (form (a b) (list (quote let) (list (quote __or-val__) a) (list (quote if) (quote __or-val__) (quote __or-val__) b))))
+(define search-source (fn (term) (let (syms (symbols) names (keys syms)) (filter (fn (name) (let (src (to-string (node-expr (get syms name)))) (contains? src term))) names))))
 
-(define cond (form (& pairs) (let (rev (reverse pairs) expanded (loop ((ps rev) (result (quote nil))) (if (empty? ps) result (recur (rest (rest ps)) (list (quote if) (nth ps 1) (head ps) result))))) expanded)))
+(define collect-refs (fn (ast) (loop ((stack (list ast)) (acc (list))) (if (empty? stack) acc (let (item (head stack) rest-stack (rest stack)) (if (node-ref? item) (recur rest-stack (append acc (list item))) (if (list? item) (recur (append item rest-stack) acc) (recur rest-stack acc))))))))
 
-(define case (form (target & clauses) (let (rev (reverse clauses) has-default (eq (mod (len clauses) 2) 1) start-result (if has-default (head rev) (quote nil)) start-cs (if has-default (rest rev) rev) expanded (loop ((cs start-cs) (result start-result)) (if (empty? cs) result (recur (rest (rest cs)) (list (quote if) (list (quote eq) (quote __case-target__) (nth cs 1)) (head cs) result))))) (list (quote let) (list (quote __case-target__) target) expanded))))
+(define dep-tree (fn (sym) (let (refs (uniq (collect-refs (node-expr sym)))) (map (fn (ref) (let (name (to-string ref) children (uniq (collect-refs (node-expr ref)))) (if (empty? children) (dict "name" name) (dict "name" name "deps" (map to-string children))))) refs))))
 
-(define when (form (test body) (list (quote if) test body nil)))
-
-(define unless (form (test body) (list (quote if) test nil body)))
-
-(define nil? (fn (x) (eq (type x) :nil)))
-
-(define empty? (fn (xs) (eq (len xs) 0)))
-
-(define neq (fn (a b) (not (eq a b))))
-
-(define le (fn (a b) (or (lt a b) (eq a b))))
-
-(define ge (fn (a b) (or (gt a b) (eq a b))))
-
-(define reverse (fn (xs) (fold (fn (acc x) (cons x acc)) (list) xs)))
-
-(define member? (fn (xs x) (loop ((xs xs)) (if (empty? xs) false (if (eq (head xs) x) true (recur (rest xs)))))))
-
-(define uniq (fn (xs) (if (empty? xs) (list) (let (sorted (sort-by identity xs)) (reverse (fold (fn (acc x) (if (eq (head acc) x) acc (cons x acc))) (list (head sorted)) (rest sorted)))))))
-
-(define dissoc (fn (m k) (fold (fn (acc key) (if (eq key k) acc (put acc key (get m key)))) (dict) (keys m))))
-
-(define merge (fn (m1 m2) (fold (fn (acc k) (put acc k (get m2 k))) m1 (keys m2))))
+(define explain-trace (fn (t) (let (entry (get t "entry") err (get t "error") result (get t "result") sends (get t "sends") ts (get t "timestamp")) (dict "entry" entry "timestamp" ts "outcome" (if (nil? err) (to-string result) (concat "ERROR: " err)) "sends" (map (fn (s) (dict "module" (get s "module") "request" (to-string (get s "request")) "response" (to-string (get s "response")))) sends)))))

@@ -72,6 +72,14 @@ A second `refresh-all` with just `["lang-ex-if-no-else"]` as the target treated 
 2. **When both change, refresh from the leaf.** After parallel defines, call `refresh-all` with just the leaf target. The dependent will be re-resolved as part of the chain.
 3. **Don't list stale nodes as refresh targets.** A target means "I'm current." If it might be stale, make it a dependent instead.
 
+### Multi-level refresh staleness (builtins session)
+
+A related problem surfaced when fixing test nodes deep in the tree. After redefining 7 leaf test nodes and calling `refresh-all` with those as targets, the refresh propagated through builtins → category containers → `lang-builtins` → `lang`. But `lang-builtins` was refreshed before `lang-builtins-data` had been re-resolved in the same pass, so `lang-builtins` picked up the old `lang-builtins-data` node-ref.
+
+Calling `refresh-all` again didn't fix it either — the intermediate nodes were already marked as refreshed. The only reliable fix was to **redefine containers bottom-up**: redefine `lang-builtins-data`, then `lang-builtins`, then `lang`. Each redefine resolves symbols to their current nodes, so the chain is clean.
+
+**Rule 4: For deep chain fixes, redefine bottom-up rather than relying on refresh-all.** Refresh works well for single-level propagation (change a leaf, refresh its direct parent). For multi-level chains, explicit redefines are more reliable.
+
 ### Broader implication
 This is a general principle for graph programming: the define-refresh cycle has an implicit ordering contract. Making this explicit — either through sequential defines or smarter refresh semantics — would eliminate a class of subtle bugs.
 

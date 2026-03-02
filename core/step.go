@@ -708,6 +708,14 @@ func (e *Evaluator) builtinStepEval(args []Value) (Value, error) {
 		return Value{}, fmt.Errorf("step-eval: parse error: %w", err)
 	}
 
+	if e.ResolveAST != nil {
+		resolved, resolveErr := e.ResolveAST(node)
+		if resolveErr != nil {
+			return Value{}, fmt.Errorf("step-eval: %w", resolveErr)
+		}
+		node = resolved
+	}
+
 	es := &evalState{
 		node:       node,
 		evaluating: true,

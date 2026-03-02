@@ -13,9 +13,13 @@ type Builtin func(args []Value) (Value, error)
 // NodeResolver looks up a node by ID and returns its expression AST.
 type NodeResolver func(nodeID string) (*Node, error)
 
+// ASTResolver resolves symbols in a parsed AST to node-refs and builtins.
+type ASTResolver func(node *Node) (*Node, error)
+
 // Evaluator evaluates s-expression nodes.
 type Evaluator struct {
 	ResolveNode   NodeResolver
+	ResolveAST    ASTResolver
 	Builtins      map[string]Builtin
 	locals        []map[string]Value
 	activeTrace   *Trace  // set by Core during external evals

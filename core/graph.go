@@ -84,6 +84,10 @@ func NewGraph(dir string, builtins map[string]Builtin) (*Graph, error) {
 		Builtins: builtins,
 	}
 	ev.ResolveNode = g.resolveNode
+	ev.ResolveAST = func(node *Node) (*Node, error) {
+		var refs []Ref
+		return g.resolveAST(node, &refs, nil)
+	}
 	builtins["assert"] = ev.builtinAssert
 	builtins["step-eval"] = ev.builtinStepEval
 	builtins["step-continue"] = ev.builtinStepContinue
