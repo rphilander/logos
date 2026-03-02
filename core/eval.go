@@ -1740,16 +1740,20 @@ func builtinNth(args []Value) (Value, error) {
 }
 
 func builtinAppend(args []Value) (Value, error) {
-	if len(args) != 2 {
-		return Value{}, fmt.Errorf("append: expected 2 args, got %d", len(args))
+	if len(args) < 2 {
+		return Value{}, fmt.Errorf("append: expected 2+ args, got %d", len(args))
 	}
-	if args[0].Kind != ValList || args[1].Kind != ValList {
-		return Value{}, fmt.Errorf("append: expected two Lists, got %s and %s", args[0].KindName(), args[1].KindName())
+	total := 0
+	for i, a := range args {
+		if a.Kind != ValList {
+			return Value{}, fmt.Errorf("append: arg %d is %s, expected List", i+1, a.KindName())
+		}
+		total += len(*a.List)
 	}
-	a, b := *args[0].List, *args[1].List
-	result := make([]Value, len(a)+len(b))
-	copy(result, a)
-	copy(result[len(a):], b)
+	result := make([]Value, 0, total)
+	for _, a := range args {
+		result = append(result, *a.List...)
+	}
 	return ListVal(result), nil
 }
 
