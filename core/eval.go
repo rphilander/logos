@@ -22,10 +22,10 @@ type Evaluator struct {
 	ResolveAST    ASTResolver
 	Builtins      map[string]Builtin
 	locals        []map[string]Value
-	activeTrace   *Trace  // set by Core during external evals
-	currentNodeID string  // tracks innermost graph node being evaluated
-	Fuel          int     // remaining eval steps when FuelSet is true
-	FuelSet       bool    // whether fuel limiting is active
+	activeTrace   *Trace // set by Core during external evals
+	currentNodeID string // tracks innermost graph node being evaluated
+	Fuel          int    // remaining eval steps when FuelSet is true
+	FuelSet       bool   // whether fuel limiting is active
 }
 
 func (e *Evaluator) pushScope(bindings map[string]Value) {
@@ -50,21 +50,21 @@ func (e *Evaluator) lookupLocal(name string) (Value, bool) {
 type frameKind int
 
 const (
-	frameFnBody      frameKind = iota // entered fn body; holds scopeBase for cleanup
-	frameScopeCleanup                 // pop one scope on value pass-through (non-tail let)
-	frameRef                          // evaluating node-ref expression; restore currentNodeID, tag fn/form
-	frameEvalHead                     // evaluated computed head; dispatch fn/form/error
-	frameBuiltinArg                   // evaluating builtin arguments one by one
-	frameFnArg                        // evaluating fn call arguments one by one
-	frameIfCond                       // evaluated if condition; pick branch
-	frameLetBind                      // evaluating let binding values sequentially
-	frameDo                           // evaluating do expressions sequentially
+	frameFnBody       frameKind = iota // entered fn body; holds scopeBase for cleanup
+	frameScopeCleanup                  // pop one scope on value pass-through (non-tail let)
+	frameRef                           // evaluating node-ref expression; restore currentNodeID, tag fn/form
+	frameEvalHead                      // evaluated computed head; dispatch fn/form/error
+	frameBuiltinArg                    // evaluating builtin arguments one by one
+	frameFnArg                         // evaluating fn call arguments one by one
+	frameIfCond                        // evaluated if condition; pick branch
+	frameLetBind                       // evaluating let binding values sequentially
+	frameDo                            // evaluating do expressions sequentially
 	frameFormExpand                    // form body produced expansion value; convert to AST and eval
-	frameApplyFn                      // evaluated apply's fn arg; now eval list arg
-	frameApplyList                    // evaluated apply's list arg; enter fn body
-	frameLoopBind                     // evaluating loop binding values sequentially
-	frameLoop                         // loop body running; holds metadata for recur
-	frameRecurArg                     // evaluating recur argument values
+	frameApplyFn                       // evaluated apply's fn arg; now eval list arg
+	frameApplyList                     // evaluated apply's list arg; enter fn body
+	frameLoopBind                      // evaluating loop binding values sequentially
+	frameLoop                          // loop body running; holds metadata for recur
+	frameRecurArg                      // evaluating recur argument values
 )
 
 type frame struct {
@@ -89,21 +89,21 @@ type frame struct {
 	builtinIdx  int
 
 	// frameFnArg
-	fn      *FnValue
-	fnDone  []Value
-	fnArgs  []*Node
-	fnIdx   int
+	fn     *FnValue
+	fnDone []Value
+	fnArgs []*Node
+	fnIdx  int
 
 	// frameIfCond
 	thenNode *Node
 	elseNode *Node
 
 	// frameLetBind
-	bindings     map[string]Value
-	bindPairs    []*Node
-	bindIdx      int
-	bodyNode     *Node
-	scopeIdx     int      // index into e.locals where bindings map lives
+	bindings  map[string]Value
+	bindPairs []*Node
+	bindIdx   int
+	bodyNode  *Node
+	scopeIdx  int // index into e.locals where bindings map lives
 
 	// frameDo
 	doExprs []*Node
@@ -118,12 +118,12 @@ type frame struct {
 	applyFn *FnValue
 
 	// frameLoopBind / frameLoop / frameRecurArg
-	loopNames   []string // binding names
-	loopBody    *Node    // body AST
-	loopScopeIdx int     // index into e.locals
-	recurArgs   []*Node  // recur arg AST nodes (frameRecurArg)
-	recurDone   []Value  // evaluated recur args so far
-	recurIdx    int      // current recur arg index
+	loopNames    []string // binding names
+	loopBody     *Node    // body AST
+	loopScopeIdx int      // index into e.locals
+	recurArgs    []*Node  // recur arg AST nodes (frameRecurArg)
+	recurDone    []Value  // evaluated recur args so far
+	recurIdx     int      // current recur arg index
 }
 
 // evalState holds the loop variables for one eval loop iteration.

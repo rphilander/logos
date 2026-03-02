@@ -10,13 +10,13 @@ import (
 type NodeKind int
 
 const (
-	NodeInt    NodeKind = iota
+	NodeInt NodeKind = iota
 	NodeFloat
 	NodeBool
 	NodeString
 	NodeSymbol
 	NodeList
-	NodeRef     // resolved reference: Str = original symbol name, Ref = node ID
+	NodeRef // resolved reference: Str = original symbol name, Ref = node ID
 	NodeNil
 	NodeKeyword
 	NodeBuiltin // resolved builtin: Str = builtin name

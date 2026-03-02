@@ -14,7 +14,7 @@ var frameKindToKeyword = map[frameKind]string{
 	frameIfCond:       "if-cond",
 	frameLetBind:      "let-bind",
 	frameDo:           "do",
-	frameFormExpand:    "form-expand",
+	frameFormExpand:   "form-expand",
 	frameApplyFn:      "apply-fn",
 	frameApplyList:    "apply-list",
 	frameLoopBind:     "loop-bind",

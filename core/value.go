@@ -10,7 +10,7 @@ import (
 type ValueKind int
 
 const (
-	ValInt    ValueKind = iota
+	ValInt ValueKind = iota
 	ValFloat
 	ValBool
 	ValString
@@ -61,7 +61,7 @@ func ListVal(elems []Value) Value {
 func MapVal(m map[string]Value) Value {
 	return Value{Kind: ValMap, Map: &m}
 }
-func NilVal() Value        { return Value{Kind: ValNil} }
+func NilVal() Value             { return Value{Kind: ValNil} }
 func KeywordVal(s string) Value { return Value{Kind: ValKeyword, Str: s} }
 func SymbolVal(s string) Value  { return Value{Kind: ValSymbol, Str: s} }
 func NodeRefVal(s string) Value { return Value{Kind: ValNodeRef, Str: s} }

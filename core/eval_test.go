@@ -43,9 +43,9 @@ func TestEvalIfTruthy(t *testing.T) {
 	testEval(t, `(if true "yes" "no")`, StringVal("yes"))
 	testEval(t, `(if false "yes" "no")`, StringVal("no"))
 	testEval(t, `(if nil "yes" "no")`, StringVal("no"))
-	testEval(t, `(if 0 "yes" "no")`, StringVal("yes"))       // 0 is truthy
-	testEval(t, `(if "" "yes" "no")`, StringVal("yes"))       // "" is truthy
-	testEval(t, `(if (list) "yes" "no")`, StringVal("yes"))   // empty list is truthy
+	testEval(t, `(if 0 "yes" "no")`, StringVal("yes"))      // 0 is truthy
+	testEval(t, `(if "" "yes" "no")`, StringVal("yes"))     // "" is truthy
+	testEval(t, `(if (list) "yes" "no")`, StringVal("yes")) // empty list is truthy
 }
 
 // --- Let ---
@@ -291,7 +291,7 @@ func TestComparisonBool(t *testing.T) {
 func TestComparisonLists(t *testing.T) {
 	// Lexicographic
 	testEval(t, `(lt (list 1 2) (list 1 3))`, BoolVal(true))
-	testEval(t, `(lt (list 1) (list 1 2))`, BoolVal(true)) // shorter < longer
+	testEval(t, `(lt (list 1) (list 1 2))`, BoolVal(true))    // shorter < longer
 	testEval(t, `(lt (list 1 2) (list 1 2))`, BoolVal(false)) // equal
 	testEval(t, `(gt (list 2) (list 1 2 3))`, BoolVal(true))
 }
@@ -511,9 +511,9 @@ func TestFormArityError(t *testing.T) {
 
 func TestFormSyntaxErrors(t *testing.T) {
 	testEvalError(t, `(form)`)
-	testEvalError(t, `(form (x))`)           // missing body
-	testEvalError(t, `(form "bad" x)`)        // params not a list
-	testEvalError(t, `(form (1) x)`)           // param not a symbol
+	testEvalError(t, `(form (x))`)     // missing body
+	testEvalError(t, `(form "bad" x)`) // params not a list
+	testEvalError(t, `(form (1) x)`)   // param not a symbol
 }
 
 func TestFormApplyRejects(t *testing.T) {
@@ -739,11 +739,11 @@ func TestLoopNoBindings(t *testing.T) {
 }
 
 func TestLoopSyntaxErrors(t *testing.T) {
-	testEvalError(t, `(loop)`)                        // missing bindings and body
-	testEvalError(t, `(loop ())`)                     // missing body
-	testEvalError(t, `(loop "bad" 1)`)               // bindings not a list
-	testEvalError(t, `(loop ((1 2)) 1)`)              // name not a symbol
-	testEvalError(t, `(loop ((x)) 1)`)                // pair has only one element
+	testEvalError(t, `(loop)`)           // missing bindings and body
+	testEvalError(t, `(loop ())`)        // missing body
+	testEvalError(t, `(loop "bad" 1)`)   // bindings not a list
+	testEvalError(t, `(loop ((1 2)) 1)`) // name not a symbol
+	testEvalError(t, `(loop ((x)) 1)`)   // pair has only one element
 }
 
 // --- NodeBuiltin ---

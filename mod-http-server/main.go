@@ -72,8 +72,8 @@ type Module struct {
 	modConn net.Conn
 	cbConn  net.Conn
 
-	cbMu   sync.Mutex // protects writes to cbConn
-	modMu  sync.Mutex // protects writes to modConn
+	cbMu  sync.Mutex // protects writes to cbConn
+	modMu sync.Mutex // protects writes to modConn
 
 	listeners   map[int]*http.Server
 	listenersMu sync.Mutex

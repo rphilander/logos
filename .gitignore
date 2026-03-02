@@ -1,9 +1,11 @@
 # Binaries
 core/logos
-core/logos-cli
+core/cmd/logos-cli/logos-cli
+mcp-logos/mcp-logos
 mod-time/mod-time
 mod-http-server/mod-http-server
-mcp-logos/mcp-logos
+mod-sqlite/mod-sqlite
+mod-mcp-server/mod-mcp-server
 
 # Session log (ephemeral)
 data/log.logos
