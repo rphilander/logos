@@ -723,3 +723,11 @@
 
 (define lang-search (fn (query & opts) (let (depth (if (empty? opts) 1 (head opts)) roots (if (le (len opts) 1) (list lang) (nth opts 1))) (fold (fn (acc root) (append acc (lang-search-in query depth root))) (list) roots))))
 
+(define lang-search (fn (query & opts) (let (depth (if (empty? opts) 1 (head opts)) roots (if (le (len opts) 1) (list lang) (nth opts 1))) (fold (fn (acc root) (append acc (lang-search-in query depth root))) (list) roots))))
+
+(define lang-search-in (fn (query depth root) (loop ((stack (list (list root "" "" (list)))) (acc (list))) (if (empty? stack) acc (let (entry (head stack) rest-stack (rest stack) node (head entry) path (nth entry 1) parent-name (nth entry 2) sibling-symbols (nth entry 3) name (get node "name") current-path (if (eq path "") name (concat path " > " name)) is-match (lang-search-matches? node query) own-result (if is-match (list (lang-search-result node current-path depth parent-name sibling-symbols)) (list)) members (get node "members") concepts (get node "concepts") all-children (append (if (nil? members) (list) members) (if (nil? concepts) (list) concepts)) child-symbols (map (fn (c) (get c "symbol")) all-children) child-entries (map (fn (child) (list child current-path name child-symbols)) all-children)) (recur (append child-entries rest-stack) (append acc own-result)))))))
+
+(define lang-search-matches? (fn (node query) (let (name (get node "name") desc (get node "description") kws (get node "keywords") in-name (if (nil? name) false (contains? name query)) in-desc (if (nil? desc) false (contains? desc query)) in-kws (if (nil? kws) false (fold (fn (acc kw) (or acc (contains? kw query))) false kws))) (or in-name (or in-desc in-kws)))))
+
+(define lang-search-result (fn (node path depth parent-name sibling-symbols) (let (base (dict "name" (get node "name") "symbol" (get node "symbol") "path" path) r1 (if (ge depth 1) (put base "description" (get node "description")) base) r2 (if (ge depth 2) (let (examples (get node "examples")) (if (nil? examples) (put r1 "examples" (list)) (put r1 "examples" (map (fn (e) (dict "name" (get e "name") "expr" (get e "expr"))) examples)))) r1) r3 (if (ge depth 3) (put (put r2 "parent" parent-name) "siblings" sibling-symbols) r2)) r3)))
+

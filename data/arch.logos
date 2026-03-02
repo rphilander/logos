@@ -92,7 +92,7 @@
 
 (define anchor-core (dict :symbol "anchor-core" :name "Core" :file "core/core.go" :scope "Core" :hash "sha256:3db14b1f98e08c711a6b89ce22639e00181d87da4da14a72ab0957b2397b0e40" :commit "78012b0" :description "Central actor owning graph state, module registry, sockets, trace buffer."))
 
-(define anchor-handle-request (dict :symbol "anchor-handle-request" :name "handleRequest" :file "core/core.go" :scope "Core.handleRequest" :hash "sha256:44239e5d9605e344d2a441b63a5be4d340cf7d145216dc1281b8632ea15b39a2" :commit "78012b0" :description "Main dispatch switch for all client ops. Routes to op-specific handlers, adds active_library to responses."))
+(define anchor-handle-request (dict :symbol "anchor-handle-request" :name "handleRequest" :file "core/core.go" :scope "Core.handleRequest" :hash "sha256:b765e9b7ad021c190e83acd6af0d4d9e7d5d83f5ec902786639fb33901d76efe" :commit "ab1fb73" :description "Main dispatch switch for all client ops. Routes to op-specific handlers, adds active_library to responses."))
 
 (define anchor-actor-loop (dict :symbol "anchor-actor-loop" :name "actorLoop" :file "core/core.go" :scope "Core.actorLoop" :hash "sha256:0b8444c73ea9553557d6c1e8597db161a350a3a81399a11c21d7f2126c178a44" :commit "78012b0" :description "Single goroutine owning graph state. Reads from requests channel, dispatches callback vs regular requests."))
 
@@ -260,52 +260,6 @@
           (recur new-stack
                  (concat acc header kw-sec
                    member-sec anchor-sec int-sec sa-sec "\n"))))))))
-
-(define arch-search (fn (query & opts)
-  (let (depth (if (empty? opts) 1 (head opts))
-        raw (loop ((stack (list (list arch "" "")))
-                   (acc (list)))
-              (if (empty? stack)
-                acc
-                (let (entry (head stack)
-                      rest-stack (rest stack)
-                      cur (head entry)
-                      path (nth entry 1)
-                      parent-name (nth entry 2)
-                      name (get cur :name)
-                      current-path (if (eq path "") name (concat path " > " name))
-                      is-match (lang-search-matches? cur query)
-                      file (get cur :file)
-                      is-anchor (not (nil? file))
-                      own-result (if is-match
-                        (list (let (base (dict :name name :symbol (get cur :symbol) :path current-path)
-                                    r1 (if (ge depth 1) (put base :description (get cur :description)) base)
-                                    r2 (if (and (ge depth 2) is-anchor) (put (put r1 :file file) :scope (get cur :scope)) r1)
-                                    r3 (if (and (ge depth 2) (not is-anchor)) (if (not (nil? (get cur :keywords))) (put r2 :keywords (get cur :keywords)) r2) r2))
-                               r3))
-                        (list))
-                      anchors (if (nil? (get cur :anchors)) (list) (get cur :anchors))
-                      interactions (if (nil? (get cur :interactions)) (list) (get cur :interactions))
-                      members (if (nil? (get cur :members)) (list) (get cur :members))
-                      children (fold (fn (a b) (append a b)) (list)
-                        (list members interactions anchors))
-                      child-entries (map (fn (c) (list c current-path name)) children))
-                  (recur (append child-entries rest-stack)
-                         (append acc own-result))))))
-    (loop ((items raw) (seen (list)) (acc (list)))
-      (if (empty? items)
-        (reverse acc)
-        (let (item (head items)
-              sym (get item :symbol))
-          (if (member? seen sym)
-            (recur (rest items) seen acc)
-            (recur (rest items) (cons sym seen) (cons item acc)))))))))
-
-(define anchor-handle-request (dict :symbol "anchor-handle-request" :name "handleRequest" :file "core/core.go" :scope "Core.handleRequest" :hash "sha256:b765e9b7ad021c190e83acd6af0d4d9e7d5d83f5ec902786639fb33901d76efe" :commit "ab1fb73" :description "Main dispatch switch for all client ops. Routes to op-specific handlers, adds active_library to responses."))
-
-(define arch (dict :symbol "arch" :name "Logos Architecture Reference" :description "Architecture documentation for the logos v3 runtime. Each concept node describes a subsystem with code anchors validated against the source via mod-go. Interaction nodes document how subsystems connect, with their own anchors at boundary points. Cross-references to the lang library link implementation to language semantics." :members (list arch-evaluator arch-graph arch-parser arch-types arch-core-api arch-modules arch-libraries arch-step-debugger arch-traces arch-mcp)))
-
-(define arch-core-api (dict :symbol "arch-core-api" :name "Core API" :description "Request/response dispatcher at the heart of the system. The Core struct owns the graph, module registry, and trace buffer. All graph mutations are serialized through a single actor goroutine (actorLoop) that reads from a requests channel. handleRequest is the main dispatch switch routing ops (eval, define, delete, refresh-all, library ops, fuel, clear) to specific handlers. The wire protocol (WriteMsg/ReadMsg) uses 4-byte big-endian length prefix + JSON body over unix domain sockets. Three socket types: CLI (client requests), module (outbound to modules), and callback (inbound from modules)." :keywords (list "Core" "API" "dispatch" "handleRequest" "actorLoop" "actor" "socket" "request" "response" "wire protocol" "WriteMsg" "ReadMsg" "JSON") :anchors (list anchor-core anchor-handle-request anchor-actor-loop anchor-handle-eval anchor-write-msg anchor-read-msg) :interactions (list) :see-also (list (link 'arch-evaluator) (link 'arch-graph) (link 'arch-modules) (link 'arch-libraries) (link 'arch-traces) (link 'arch-mcp))))
 
 (define arch-search (fn (query & opts)
   (let (depth (if (empty? opts) 1 (head opts))

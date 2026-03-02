@@ -34,9 +34,9 @@
 
 (define empty? (fn (xs) (eq (len xs) 0)))
 
-(define and (form (a b) (list (quote if) a b false)))
+(define and (form (first & rest) (if (empty? rest) first (fold (fn (acc x) (list (quote if) acc x false)) first rest))))
 
-(define or (form (a b) (list (quote let) (list (quote __or-val__) a) (list (quote if) (quote __or-val__) (quote __or-val__) b))))
+(define or (form (first & rest) (if (empty? rest) first (let (rev (reverse (cons first rest))) (fold (fn (acc x) (list (quote let) (list (quote __or__) x) (list (quote if) (quote __or__) (quote __or__) acc))) (head rev) (rest rev))))))
 
 (define when (form (test body) (list (quote if) test body nil)))
 
@@ -94,4 +94,3 @@
 
 (define dep-tree (fn (sym) (let (refs (uniq (collect-refs (node-expr sym)))) (map (fn (ref) (let (name (to-string ref) children (uniq (collect-refs (node-expr ref)))) (if (empty? children) (dict "name" name) (dict "name" name "deps" (map to-string children))))) refs))))
 
-(define explain-trace (fn (t) (let (entry (get t "entry") err (get t "error") result (get t "result") sends (get t "sends") ts (get t "timestamp")) (dict "entry" entry "timestamp" ts "outcome" (if (nil? err) (to-string result) (concat "ERROR: " err)) "sends" (map (fn (s) (dict "module" (get s "module") "request" (to-string (get s "request")) "response" (to-string (get s "response")))) sends)))))
