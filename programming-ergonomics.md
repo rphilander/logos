@@ -112,6 +112,31 @@ Both pitfalls produce the same opaque error (`len: expected List or Map, got Str
 2. Is `member?` being called with swapped args?
 3. Is a string being passed where a list is expected?
 
+## Library Compact Doesn't Respect Define Order
+
+### The problem
+`library-compact` rewrites a library file with only live definitions, but doesn't consider define-time dependencies. If symbol B references symbol A, A must appear before B in the file — but compact may write them in arbitrary order (Go map iteration). This causes startup failures: `unresolved symbol: X`.
+
+### How it manifests
+After making variadic `and`/`or` (which reference `fold`/`reverse`), compacting base.logos put `and` before `fold`, causing `unresolved symbol: fold` on restart. Similarly, compacting guides.logos put the `guides` root node before `guide-add-module`, causing `unresolved symbol: guide-add-module`.
+
+### Current workaround
+Manually reorder library files after compact to respect define-time dependencies. This is error-prone and tedious.
+
+### Fix: toposort in compact
+Upgrade `compactLibrary` in graph.go to topologically sort definitions before writing. Every node already tracks its `Refs` (dependencies). Filter to intra-library deps, toposort, write in that order. No cycles possible (logos forbids recursion). This would make compact produce correct files by construction.
+
+## Refresh-All Can Produce Malformed Log Entries
+
+### The problem
+When `refresh-all` writes re-resolved definitions to library files via `appendLogToOwner`, consecutive entries can be written without the blank-line separator that the replay parser expects. This causes `unexpected input after expression` errors on restart.
+
+### How it manifests
+After refreshing `and`/`or` dependents, `trace-expand` and `step-n` were written to debug.logos on consecutive lines without a blank line between them.
+
+### Fix
+`appendLogToOwner` (or the refresh code that calls it) needs to ensure blank-line separation between entries. May be a missing `\n` in the format string.
+
 ## Session-to-Library Workflow
 
 Every function follows a ritual: define in session → test → delete → open library → redefine → close library. That's 5 tool calls of ceremony per function. It works reliably but adds overhead, especially when defining multiple related functions (e.g., `arch-collect-anchors` then `arch-validate` then `arch-search`).
