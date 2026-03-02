@@ -43,9 +43,9 @@ Operations:
 - **`show`** — `{"op": "show", "commit": "abc123"}` → commit message + list of changed files.
 - **`diff-file`** — `{"op": "diff-file", "file": "core/eval.go", "from": "abc123", "to": "def456"}` → diff of a file between two commits.
 
-## Phase 2: Shared Documentation Framework (`docs` library)
+## Phase 2: Shared Documentation Framework (`docs` library) — DEFERRED
 
-A new logos library (`data/docs.logos`) providing shared functions for both `lang` and `arch` nodes.
+A new logos library (`data/docs.logos`) providing shared functions for both `lang` and `arch` nodes. Deferred until we have more usage experience with the arch library.
 
 Library order: `base` → `docs` → `lang` → `arch`
 
@@ -56,70 +56,69 @@ The validation and description patterns are analogous across lang and arch:
 - **Description**: both generate wiki-style markdown at varying detail levels. Arch descriptions can include live source snippets via mod-go anchors. Cross-links between the two wikis via `(link ...)`.
 - **Search**: keyword search across node trees. Already works in lang; generalize to work across both libraries.
 
-### Design
+## Phase 3: Architecture Library (`data/arch.logos`) ✓ COMPLETE
 
-Identify the shared patterns after building the arch library (Phase 3), then extract common functions into `docs`. This avoids premature abstraction — build arch first, see what's actually shared, then factor it out.
+### What was built
 
-## Phase 3: Architecture Library (`data/arch.logos`)
+10 concept nodes, 43 anchors, 5 interaction nodes, 1 root node. All anchors validated against live source.
 
-### Structure
+**Concept nodes:**
+- `arch-evaluator` — 8 anchors, 3 interaction nodes, 11 see-also links
+- `arch-graph` — 7 anchors, 3 interaction nodes (shares eval↔graph), 5 see-also links
+- `arch-parser` — 5 anchors, 1 interaction node (shares graph↔parser)
+- `arch-types` — 7 anchors, 1 interaction node (shares eval↔types)
+- `arch-core-api` — 6 anchors
+- `arch-modules` — 4 anchors
+- `arch-libraries` — 8 anchors (includes shared anchors from graph), 1 interaction node (shares graph↔libraries)
+- `arch-step-debugger` — 6 anchors (includes shared anchors from eval), 1 interaction node (shares eval↔step-debugger)
+- `arch-traces` — 5 anchors
+- `arch-mcp` — 2 anchors
 
-```
-arch
-├── arch-core-api        — Core API ops
-├── arch-evaluator       — Frame-based iterative evaluator
-├── arch-parser          — S-expression parser
-├── arch-graph           — Graph system (Define, resolveAST, refresh-all)
-├── arch-types           — Value type system
-├── arch-modules         — Module protocol, sockets, module management
-├── arch-libraries       — Library persistence
-├── arch-step-debugger   — Step evaluator architecture
-├── arch-traces          — Trace system
-└── arch-mcp             — MCP server tools
-```
+**Interaction nodes** (with their own anchors at boundary points):
+- `arch-eval-graph-interaction` — ResolveNode, ResolveAST, currentNodeID
+- `arch-eval-step-debugger-interaction` — evalState serialization/deserialization
+- `arch-eval-types-interaction` — nodeToValue/valueToNode, DataBuiltins
+- `arch-graph-libraries-interaction` — replay, appendLog, compact
+- `arch-graph-parser-interaction` — Parse→resolveAST pipeline
 
-### Node pattern
+**Cross-references to lang library:**
+- `arch-evaluator` → lang-form-loop, lang-form-fn, lang-form-form, lang-form-if, lang-form-let, lang-concept-closures, lang-concept-iteration, lang-concept-define-time
+- `arch-graph` → lang-concept-define-time, lang-concept-graph
+- `arch-parser` → lang-syntax
+- `arch-types` → lang-types
+- `arch-step-debugger` → lang-builtin-step-eval
 
-Each arch node follows the lang convention but adds an `anchors` field:
+### Node patterns established
 
-```
-(dict :symbol "arch-evaluator"
-      :name "Evaluator"
-      :description "..."
-      :keywords (list ...)
-      :anchors (list anchor-eval-loop anchor-frame-types ...)
-      :see-also (list (link 'arch-graph) (link 'lang-form-loop)))
-```
+**Three tiers:**
+- **Anchors**: code facts (file, scope, hash, commit, description). No keywords.
+- **Interaction nodes**: relationship descriptions with own anchors + keywords. Link both concepts.
+- **Concept nodes**: high-level narrative with anchors, interactions, keywords, see-also.
 
-### Anchor nodes
+**Strong interactions** → full interaction nodes. **Weak interactions** → simple `(link ...)` in see-also.
 
-```
-(dict :symbol "anchor-eval-loop"
-      :name "evalLoop"
-      :file "core/eval.go"
-      :scope "Evaluator.evalLoop"
-      :hash "sha256:..."
-      :commit "abc123..."
-      :description "Main evaluation loop — pops frames from stack and dispatches by frame type")
-```
+Interaction nodes are shared: both concept nodes reference the same interaction in their `:interactions` list.
 
-- Anchor identity = `file` + `scope` (AST path). Stable across edits.
-- `hash` detects body changes. Trim leading/trailing whitespace only.
-- `commit` records when the hash was captured. mod-git provides context for what changed since.
-- Line numbers are informational (returned by mod-go queries) but not stored in anchors.
-- Only committed code can be anchored.
+### Anchor conventions
+- Identity = `file` + `scope` (AST path). Stable across edits.
+- `hash`: SHA-256 of body text, trimmed leading/trailing whitespace only.
+- `commit`: git SHA when hash was captured.
+- Line numbers informational only, not stored in anchors.
+- Only committed code anchored.
 
-### Anchor scope
+## Phase 4: Remaining Work
 
-Start lean — a few key constructs per arch node (3-5 anchors). Expand as we use the system. Iteration is the point.
+### arch-validate function
+Build `arch-validate` in the arch library: walks the tree, collects all anchor nodes, batch-sends to mod-go via `validate-anchors`, reports valid/changed/not_found. When changed, the LLM can use mod-git to see what commits caused the change and decide whether to refresh or update.
 
-### Validation
+### arch-describe function
+Wiki-style markdown generation for arch nodes. Can pull live source snippets via mod-go anchors. Different detail levels (brief/full). Links to lang nodes render as cross-references.
 
-`arch-validate` walks the tree, collects anchor nodes, batch-sends to mod-go via `validate-anchors`. Reports valid/changed/not_found. When changed, the LLM can use mod-git to see what commits caused the change and decide whether to refresh the anchor or update the description.
+### arch-search function
+Keyword search across arch nodes. Generalize lang-search to work across both libraries. Keywords on concept and interaction nodes enable discovery.
 
-### Cross-references
-
-Arch links to lang via `(link ...)`. `arch-evaluator` → `lang-form-loop`, `lang-concept-iteration`, etc. Search functions work across both libraries. This creates a unified knowledge base covering language semantics and implementation.
+### docs library extraction (Phase 2)
+After building arch-validate/describe/search, extract shared patterns into `data/docs.logos`. The tree-walking, validation dispatch, and description generation are analogous between lang and arch.
 
 ## Decisions Log
 
@@ -130,3 +129,6 @@ Arch links to lang via `(link ...)`. `arch-evaluator` → `lang-form-loop`, `lan
 5. Anchors carry `commit`. mod-git provides change context. Only committed code anchored.
 6. Library order: `base` → `docs` → `lang` → `arch`.
 7. Build `docs` library after arch exists (avoid premature abstraction).
+8. Keywords on concept nodes and interaction nodes, not on anchors.
+9. Strong interactions → full interaction nodes. Weak → see-also links.
+10. Interaction nodes shared by both concept nodes they connect.
