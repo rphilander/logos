@@ -903,6 +903,60 @@ func TestLibraryCompact(t *testing.T) {
 	}
 }
 
+func TestLibraryCompactTopologicalOrder(t *testing.T) {
+	dir := t.TempDir()
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	g.LibraryCreate("mylib")
+	g.LibraryOpen("mylib")
+
+	// Define parent first without dep, then child, then redefine parent with dep.
+	// First-occurrence order would put parent before child, breaking reload.
+	g.Define("parent", "1")
+	g.Define("child", "42")
+	g.Define("parent", "(list child)") // redefine to reference child
+	g.LibraryClose()
+
+	// Compact
+	if err := g.LibraryCompact("mylib"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify child comes before parent in compacted file
+	data, err := os.ReadFile(filepath.Join(dir, "mylib.logos"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	childIdx := strings.Index(content, "define child")
+	parentIdx := strings.Index(content, "define parent")
+	if childIdx < 0 || parentIdx < 0 {
+		t.Fatalf("expected both child and parent in compacted file, got:\n%s", content)
+	}
+	if childIdx > parentIdx {
+		t.Fatalf("expected child before parent in compacted file (topological order), got:\n%s", content)
+	}
+
+	// Verify reload works: clear and reinitialize
+	g.Close()
+	g2, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatalf("failed to reload after compact: %v", err)
+	}
+	defer g2.Close()
+	val, err := g2.Eval("parent")
+	if err != nil {
+		t.Fatalf("failed to eval parent after reload: %v", err)
+	}
+	if val.String() != "(list 42)" {
+		t.Fatalf("expected (list 42), got %s", val.String())
+	}
+}
+
 func TestLibraryOrderSet(t *testing.T) {
 	dir := t.TempDir()
 	g, err := NewGraph(dir, DataBuiltins())

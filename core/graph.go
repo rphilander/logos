@@ -1587,6 +1587,7 @@ func (g *Graph) replayEntryForLib(entry, libName string) error {
 			Source: testSource,
 			Expr:   resolvedTest,
 		})
+		g.symbolStatus[name] = StatusGreen
 		return nil
 
 	default:
@@ -1731,36 +1732,65 @@ func (g *Graph) LibraryCompact(name string) error {
 
 	path := g.libraryPath(name)
 
-	// Read current file to get define order
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("library-compact: %w", err)
+	// Collect live symbols owned by this library
+	libSymbols := make(map[string]bool)
+	for symName, owner := range g.symbolOwner {
+		if owner == name {
+			if _, exists := g.symbols[symName]; exists {
+				libSymbols[symName] = true
+			}
+		}
 	}
 
-	entries := splitLogEntries(string(data))
+	// Topological sort using Kahn's algorithm.
+	// Build in-degree map counting intra-library dependencies.
+	inDegree := make(map[string]int)
+	// dependents[B] = list of symbols that depend on B
+	dependents := make(map[string][]string)
+	for sym := range libSymbols {
+		inDegree[sym] = 0
+	}
+	for sym := range libSymbols {
+		nodeID := g.symbols[sym]
+		node := g.nodes[nodeID]
+		seen := make(map[string]bool)
+		for _, ref := range node.Refs {
+			if libSymbols[ref.Symbol] && ref.Symbol != sym && !seen[ref.Symbol] {
+				seen[ref.Symbol] = true
+				inDegree[sym]++
+				dependents[ref.Symbol] = append(dependents[ref.Symbol], sym)
+			}
+		}
+	}
 
-	// Track which symbols we've already seen (preserve first occurrence order)
-	seen := make(map[string]bool)
+	// Seed queue with symbols that have no intra-library dependencies
+	var queue []string
+	for sym := range libSymbols {
+		if inDegree[sym] == 0 {
+			queue = append(queue, sym)
+		}
+	}
+	sort.Strings(queue) // stable tie-breaking
+
 	var orderedNames []string
-	for _, entry := range entries {
-		node, err := Parse(entry)
-		if err != nil {
-			continue
+	for len(queue) > 0 {
+		sym := queue[0]
+		queue = queue[1:]
+		orderedNames = append(orderedNames, sym)
+		// Sort dependents for deterministic ordering
+		deps := dependents[sym]
+		sort.Strings(deps)
+		for _, dep := range deps {
+			inDegree[dep]--
+			if inDegree[dep] == 0 {
+				queue = append(queue, dep)
+			}
 		}
-		if node.Kind != NodeList || len(node.Children) < 3 {
-			continue
-		}
-		if node.Children[0].Kind != NodeSymbol || node.Children[0].Str != "define" {
-			continue
-		}
-		symName := node.Children[1].Str
-		if !seen[symName] {
-			seen[symName] = true
-			orderedNames = append(orderedNames, symName)
-		}
+		// Re-sort queue after adding new items
+		sort.Strings(queue)
 	}
 
-	// Write only live symbols in their original define order
+	// Write live symbols in dependency order
 	var sb strings.Builder
 	for _, symName := range orderedNames {
 		owner, ownerExists := g.symbolOwner[symName]
