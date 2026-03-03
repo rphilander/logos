@@ -1,6 +1,40 @@
-(define test-shape? (fn (v) (and (map? v) (has? v :name))))
+(define anchor-shape? (fn (v) (and (map? v) (has? v :symbol) (has? v :name) (has? v :file) (has? v :scope) (has? v :hash) (has? v :commit) (has? v :description))))
 
-(define test-shape? (fn (v) (and (map? v) (has? v :name) (has? v :title))))
+(test anchor-shape? "rejects-missing-key" (not (anchor-shape? (dict :symbol "x" :name "n"))))
 
-(delete test-shape?)
+(test anchor-shape? "rejects-non-map" (not (anchor-shape? 42)))
+
+(test anchor-shape? "accepts-valid" (anchor-shape? (dict :symbol "x" :name "n" :file "f" :scope "s" :hash "h" :commit "c" :description "d")))
+
+(define concept-shape? (fn (v) (and (map? v) (has? v :symbol) (has? v :name) (has? v :description) (has? v :keywords) (has? v :anchors) (not (empty? (get v :anchors))))))
+
+(test concept-shape? "accepts-valid" (concept-shape? (dict :symbol "x" :name "n" :description "d" :keywords (list "k") :anchors (list (dict :a 1)))))
+
+(test concept-shape? "rejects-empty-anchors" (not (concept-shape? (dict :symbol "x" :name "n" :description "d" :keywords (list) :anchors (list)))))
+
+(test concept-shape? "rejects-non-map" (not (concept-shape? "hello")))
+
+(define guide-shape? (fn (v) (and (map? v) (has? v :symbol) (has? v :name) (has? v :description) (has? v :keywords) (has? v :steps) (has? v :see-also))))
+
+(test guide-shape? "accepts-valid" (guide-shape? (dict :symbol "x" :name "n" :description "d" :keywords (list) :steps (list) :see-also (list))))
+
+(test guide-shape? "rejects-missing-steps" (not (guide-shape? (dict :symbol "x" :name "n" :description "d" :keywords (list)))))
+
+(test guide-shape? "rejects-non-map" (not (guide-shape? false)))
+
+(define interaction-shape? (fn (v) (and (map? v) (has? v :symbol) (has? v :name) (has? v :description) (has? v :keywords) (has? v :anchors) (has? v :concepts))))
+
+(test interaction-shape? "accepts-valid" (interaction-shape? (dict :symbol "x" :name "n" :description "d" :keywords (list) :anchors (list) :concepts (list))))
+
+(test interaction-shape? "rejects-missing-concepts" (not (interaction-shape? (dict :symbol "x" :name "n" :description "d" :keywords (list) :anchors (list)))))
+
+(test interaction-shape? "rejects-non-map" (not (interaction-shape? nil)))
+
+(define root-shape? (fn (v) (and (map? v) (has? v :symbol) (has? v :name) (has? v :description) (has? v :members) (not (empty? (get v :members))))))
+
+(test root-shape? "accepts-valid" (root-shape? (dict :symbol "x" :name "n" :description "d" :members (list 1 2))))
+
+(test root-shape? "rejects-empty-members" (not (root-shape? (dict :symbol "x" :name "n" :description "d" :members (list)))))
+
+(test root-shape? "rejects-non-map" (not (root-shape? (list))))
 

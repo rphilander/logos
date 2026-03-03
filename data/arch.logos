@@ -20,11 +20,11 @@
 
 (define anchor-define (dict :symbol "anchor-define" :name "Define" :file "core/graph.go" :scope "Graph.Define" :hash "sha256:5db225c283a59234d3afdd94c7d8adaca8129626d7eeac00caa0a597ee4bfecd" :commit "8a06d55" :description "Thin wrapper: delegates to DefineWithTests with no tests. Preserved for backward compatibility."))
 
-(test anchor-define "has-anchor-shape" (let (a anchor-define) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-define "has-anchor-shape" (anchor-shape? anchor-define))
 
 (define anchor-define-with-tests (dict :symbol "anchor-define-with-tests" :name "DefineWithTests" :file "core/graph.go" :scope "Graph.DefineWithTests" :hash "sha256:2844f336983349f20e1edf890491fe6f83e5fbaf191564264e8e2eaf070615d9" :commit "da5fb03" :description "Core symbol definition with optional test gate. Parses source, resolves AST, resolves test ASTs via resolveTestAST (restricted scope). Test refs are merged into node Refs for cascade propagation. Creates GraphNode with Tests field, updates symbol map and status, logs entry with test entries."))
 
-(test anchor-define-with-tests "has-anchor-shape" (let (a anchor-define-with-tests) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-define-with-tests "has-anchor-shape" (anchor-shape? anchor-define-with-tests))
 
 (define anchor-enter-fn-body (dict :symbol "anchor-enter-fn-body" :name "enterFnBody" :file "core/eval.go" :scope "Evaluator.enterFnBody" :hash "sha256:2b700e208e2e1e6e3f5fee5d791bc4aba7eff9547693ff85ce05f909932ea173" :commit "78012b0" :description "Function call setup: pushes closure scope, binds parameters, creates frameFnBody for cleanup, returns body node."))
 
@@ -48,31 +48,31 @@
 
 (define anchor-get-symbol-status (dict :symbol "anchor-get-symbol-status" :name "GetSymbolStatus" :file "core/graph.go" :scope "Graph.GetSymbolStatus" :hash "sha256:93cdb0afd427051eb2627e046b0b1ad15018c389536c1ae28a79fa6bafc36a52" :commit "8a06d55" :description "Returns the contract status (green/red/untested) of a symbol from the symbolStatus map."))
 
-(test anchor-get-symbol-status "has-anchor-shape" (let (a anchor-get-symbol-status) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-get-symbol-status "has-anchor-shape" (anchor-shape? anchor-get-symbol-status))
 
 (define anchor-go-to-value (dict :symbol "anchor-go-to-value" :name "GoToValue" :file "core/value.go" :scope "GoToValue" :hash "sha256:de17570244edf3a3058bebab398ff2d7e1de45a69f2c288fcb240642c39ee6f3" :commit "78012b0" :description "Converts Go any (from JSON) back to logos Value. Reverses ValueToGo prefixes."))
 
 (define anchor-graph (dict :symbol "anchor-graph" :name "Graph" :file "core/graph.go" :scope "Graph" :hash "sha256:e0b58e8f4daec4a6627016603ba3266e162b7c4f16549d74c9ab3b023f909933" :commit "8a06d55" :description "Central store: nodes map (ID → GraphNode), symbols map (name → node ID), symbolOwner (name → library), symbolStatus (name → green/red/untested), nameCounters, active library context, evaluator, log file handle."))
 
-(test anchor-graph "has-anchor-shape" (let (a anchor-graph) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-graph "has-anchor-shape" (anchor-shape? anchor-graph))
 
 (define anchor-graph-node (dict :symbol "anchor-graph-node" :name "GraphNode" :file "core/graph.go" :scope "GraphNode" :hash "sha256:3f5999214b7ba7e2d5eac9a443fe2c60fdab8dc3263001534149ef66883e7375" :commit "8a06d55" :description "Stored node: resolved AST expression, refs list, original source string, and optional contract tests ([]GraphNodeTest). Immutable once created."))
 
-(test anchor-graph-node "has-anchor-shape" (let (a anchor-graph-node) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-graph-node "has-anchor-shape" (anchor-shape? anchor-graph-node))
 
 (define anchor-graph-node-test (dict :symbol "anchor-graph-node-test" :name "GraphNodeTest" :file "core/graph.go" :scope "GraphNodeTest" :hash "sha256:7a5c4194cd732cf457569302f2b5984aae232ab31ccdcf4bb1138bc067bbdd75" :commit "8a06d55" :description "Test attached to a graph node: Name (label for identification), Source (original expression string), Expr (resolved AST with restricted scope)."))
 
-(test anchor-graph-node-test "has-anchor-shape" (let (a anchor-graph-node-test) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-graph-node-test "has-anchor-shape" (anchor-shape? anchor-graph-node-test))
 
 (define anchor-green-symbols (dict :symbol "anchor-green-symbols" :name "GreenSymbols" :file "core/graph.go" :scope "Graph.GreenSymbols" :hash "sha256:ff35fb9e17f5812fb3665a49a04a6237ddb67957b62d797946c209e58787a361" :commit "8a06d55" :description "Returns names of all symbols with status Green."))
 
-(test anchor-green-symbols "has-anchor-shape" (let (a anchor-green-symbols) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-green-symbols "has-anchor-shape" (anchor-shape? anchor-green-symbols))
 
 (define anchor-handle-callback (dict :symbol "anchor-handle-callback" :name "handleCallbackConnection" :file "core/core.go" :scope "Core.handleCallbackConnection" :hash "sha256:f7a44b310f68409ca461b4d43525bfd96f08c158251afee7ae2ee738b780c0ef" :commit "78012b0" :description "Receives inbound module callback: routes to actor loop, evaluates on-request symbol, returns response."))
 
 (define anchor-handle-define (dict :symbol "anchor-handle-define" :name "handleDefine" :file "core/core.go" :scope "Core.handleDefine" :hash "sha256:9cb3796df83a5c3717dcf59e65ffde8a5192dabbb56e7c4fdbdf234a103cf033" :commit "da5fb03" :description "Handles the define op: extracts name, expr, and optional tests from request. Calls Graph.DefineWithTests. On redefine (symbol already existed), automatically triggers RefreshAll, returning cascade results inline."))
 
-(test anchor-handle-define "has-anchor-shape" (let (a anchor-handle-define) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-handle-define "has-anchor-shape" (anchor-shape? anchor-handle-define))
 
 (define anchor-handle-eval (dict :symbol "anchor-handle-eval" :name "handleEval" :file "core/core.go" :scope "Core.handleEval" :hash "sha256:2eed5160b7c1cfdcbb39d71176c7f1b5b6e322c89e2a25263f7e396e741d6c1d" :commit "78012b0" :description "Parses expr, resolves AST, evaluates via graph.Eval, records trace, serializes result."))
 
@@ -80,35 +80,35 @@
 
 (define anchor-handle-green-symbols (dict :symbol "anchor-handle-green-symbols" :name "handleGreenSymbols" :file "core/core.go" :scope "Core.handleGreenSymbols" :hash "sha256:39314eabf0b8f6cce32993561ca8942a8ec49b1a6221f8b1582e5e08941af4c8" :commit "8a06d55" :description "Handles the green-symbols op: calls Graph.GreenSymbols, returns sorted list of symbol names with Green status."))
 
-(test anchor-handle-green-symbols "has-anchor-shape" (let (a anchor-handle-green-symbols) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-handle-green-symbols "has-anchor-shape" (anchor-shape? anchor-handle-green-symbols))
 
 (define anchor-handle-module-connection (dict :symbol "anchor-handle-module-connection" :name "handleModuleConnection" :file "core/core.go" :scope "Core.handleModuleConnection" :hash "sha256:cfb6eff71b44afb9843b1a50d90ecf499eb6d5a398f8fa8905e1c7352c9d8496" :commit "78012b0" :description "Receives module connection: sends discovery request, receives name + manual, registers in modules map."))
 
 (define anchor-handle-red-symbols (dict :symbol "anchor-handle-red-symbols" :name "handleRedSymbols" :file "core/core.go" :scope "Core.handleRedSymbols" :hash "sha256:8676ded559e55698b12f0ad03fbb44bf0e599f788b7807e277e9283045a7aa9c" :commit "8a06d55" :description "Handles the red-symbols op: calls Graph.RedSymbols, returns sorted list of symbol names with Red status."))
 
-(test anchor-handle-red-symbols "has-anchor-shape" (let (a anchor-handle-red-symbols) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-handle-red-symbols "has-anchor-shape" (anchor-shape? anchor-handle-red-symbols))
 
 (define anchor-handle-refine (dict :symbol "anchor-handle-refine" :name "handleRefine" :file "core/core.go" :scope "Core.handleRefine" :hash "sha256:cf4252dd9012bc2937254916aec59cf98257e511a35b73479a71b15febb1cbed" :commit "da5fb03" :description "Handles the refine op: extracts name, expr, add_test, remove_test from request. Calls Graph.Refine. Automatically triggers RefreshAll when propagation flag is set, returning cascade results (refreshed, red, stale) inline."))
 
-(test anchor-handle-refine "has-anchor-shape" (let (a anchor-handle-refine) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-handle-refine "has-anchor-shape" (anchor-shape? anchor-handle-refine))
 
 (define anchor-handle-refresh-all (dict :symbol "anchor-handle-refresh-all" :name "handleRefreshAll" :file "core/core.go" :scope "Core.handleRefreshAll" :hash "sha256:615e81b885965064c98890bc9d66985f08b2b013489178c6391adce4707ba340" :commit "8a06d55" :description "Handles the refresh-all op: extracts targets and dry flag, calls Graph.RefreshAll, returns refreshed/red/stale lists."))
 
-(test anchor-handle-refresh-all "has-anchor-shape" (let (a anchor-handle-refresh-all) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-handle-refresh-all "has-anchor-shape" (anchor-shape? anchor-handle-refresh-all))
 
 (define anchor-handle-request (dict :symbol "anchor-handle-request" :name "handleRequest" :file "core/core.go" :scope "Core.handleRequest" :hash "sha256:1ee86e2bf68449e04c9a9b88ad42c04d9b5f5b69e5bf9332ff02d527a62367b1" :commit "8a06d55" :description "Main dispatch switch for all client ops. Routes to op-specific handlers including refine, symbol-status, red-symbols, green-symbols. Adds active_library to responses."))
 
-(test anchor-handle-request "has-anchor-shape" (let (a anchor-handle-request) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-handle-request "has-anchor-shape" (anchor-shape? anchor-handle-request))
 
 (define anchor-handle-symbol-status (dict :symbol "anchor-handle-symbol-status" :name "handleSymbolStatus" :file "core/core.go" :scope "Core.handleSymbolStatus" :hash "sha256:4acca7788c948a57602620e1cb9b4412d7b03e06fab324800095e1cecd1a89b6" :commit "8a06d55" :description "Handles the symbol-status op: extracts name, calls GetSymbolStatus, returns status string and whether the symbol exists."))
 
-(test anchor-handle-symbol-status "has-anchor-shape" (let (a anchor-handle-symbol-status) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-handle-symbol-status "has-anchor-shape" (anchor-shape? anchor-handle-symbol-status))
 
 (define anchor-library-close (dict :symbol "anchor-library-close" :name "LibraryClose" :file "core/graph.go" :scope "Graph.LibraryClose" :hash "sha256:458335b43a7e31b4155e612f9ffa04a6f3f49bff5223d128594ac956941124ce" :commit "78012b0" :description "Closes library file, clears activeLib context, reopens session log."))
 
 (define anchor-library-compact (dict :symbol "anchor-library-compact" :name "LibraryCompact" :file "core/graph.go" :scope "Graph.LibraryCompact" :hash "sha256:752951b9aa85083544d5034ed3dc041058f5c8883ecd0f38a3144946a06772fc" :commit "da5fb03" :description "Rewrites a library file to contain only live symbols in topological dependency order using Kahn's algorithm. Builds intra-library DAG from GraphNode.Refs, sorts so dependencies come first, then writes node entries including test entries."))
 
-(test anchor-library-compact "has-anchor-shape" (let (a anchor-library-compact) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-library-compact "has-anchor-shape" (anchor-shape? anchor-library-compact))
 
 (define anchor-library-create (dict :symbol "anchor-library-create" :name "LibraryCreate" :file "core/graph.go" :scope "Graph.LibraryCreate" :hash "sha256:144fb0eea5549f6926cf1343b8a559b66c0cdedbde6e5afd14f5b5f466fdda1c" :commit "78012b0" :description "Creates empty library file and adds name to manifest."))
 
@@ -142,25 +142,25 @@
 
 (define anchor-red-symbols (dict :symbol "anchor-red-symbols" :name "RedSymbols" :file "core/graph.go" :scope "Graph.RedSymbols" :hash "sha256:40dbbdd845a84992f1faf797e1c9be7c536264d1006a0e4bce7f83f8859ce6a6" :commit "8a06d55" :description "Returns names of all symbols with status Red. The LLM's work list after a cascade."))
 
-(test anchor-red-symbols "has-anchor-shape" (let (a anchor-red-symbols) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-red-symbols "has-anchor-shape" (anchor-shape? anchor-red-symbols))
 
 (define anchor-ref (dict :symbol "anchor-ref" :name "Ref" :file "core/graph.go" :scope "Ref" :hash "sha256:7447c2f9fa429926d6a0bfab54ad1f05aebc803c8c367409c1013f9ce37d5332" :commit "78012b0" :description "Symbol reference record: Symbol name + NodeID. Stored in GraphNode.Refs for dependency tracking."))
 
 (define anchor-refine (dict :symbol "anchor-refine" :name "Refine" :file "core/graph.go" :scope "Graph.Refine" :hash "sha256:0a412f54ab49e26089dfaeede67f160e3635cb6af031ca49cc6122d47111f1ba" :commit "da5fb03" :description "Evolves an existing symbol with deltas. Carries forward unchanged fields from current node. Supports new expr, add test, remove test. Runs test gate with refs tracked via resolveTestAST. Returns propagation flag: suppressed when both expr and tests change simultaneously."))
 
-(test anchor-refine "has-anchor-shape" (let (a anchor-refine) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-refine "has-anchor-shape" (anchor-shape? anchor-refine))
 
 (define anchor-refresh-all (dict :symbol "anchor-refresh-all" :name "RefreshAll" :file "core/graph.go" :scope "Graph.RefreshAll" :hash "sha256:fceb21363dad00ba112a38960d2706881849300477890a0f006801e4ae82e5b0" :commit "8a06d55" :description "Entry point for cascade. Parses targets (symbol names or node IDs), dispatches to refreshAllDry or refreshAllLive. Returns RefreshResult with Refreshed, Red, and Stale lists."))
 
-(test anchor-refresh-all "has-anchor-shape" (let (a anchor-refresh-all) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-refresh-all "has-anchor-shape" (anchor-shape? anchor-refresh-all))
 
 (define anchor-refresh-all-live (dict :symbol "anchor-refresh-all-live" :name "refreshAllLive" :file "core/graph.go" :scope "Graph.refreshAllLive" :hash "sha256:d135a030c7dc5eac655cd367f0bfb18d802488f467add08e365bdb0631167bec" :commit "da5fb03" :description "BFS cascade with circuit breaker. For each dependent: contracted symbols are re-resolved and tested — pass → Green + continue, fail → Red + stop. Untested symbols become stale + stop. Test refs tracked via resolveTestAST. Returns RefreshResult with Refreshed, Red, and Stale lists."))
 
-(test anchor-refresh-all-live "has-anchor-shape" (let (a anchor-refresh-all-live) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-refresh-all-live "has-anchor-shape" (anchor-shape? anchor-refresh-all-live))
 
 (define anchor-refresh-result (dict :symbol "anchor-refresh-result" :name "RefreshResult" :file "core/graph.go" :scope "RefreshResult" :hash "sha256:be241be8ba95a6312cdb781e2bd3c948ce41975631f4d37e4be9e2f969ec132e" :commit "8a06d55" :description "Result of RefreshAll: Refreshed (auto-refreshed Green symbols), Red (circuit-breaker stops), Stale (untested, propagation stopped)."))
 
-(test anchor-refresh-result "has-anchor-shape" (let (a anchor-refresh-result) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-refresh-result "has-anchor-shape" (anchor-shape? anchor-refresh-result))
 
 (define anchor-replay-file (dict :symbol "anchor-replay-file" :name "replayFile" :file "core/graph.go" :scope "Graph.replayFile" :hash "sha256:e6d666a5ee2db8fb9f420289fd0edd90f9eed90252b3229a979a2d39bd2477cc" :commit "78012b0" :description "Replays a log file to reconstruct symbols. Parses entries, calls replayEntryForLib which resolves AST and stores nodes."))
 
@@ -170,17 +170,17 @@
 
 (define anchor-resolve-test-ast (dict :symbol "anchor-resolve-test-ast" :name "resolveTestAST" :file "core/graph.go" :scope "Graph.resolveTestAST" :hash "sha256:bf717d77c91ab5b71548fffaa6ea7c687e74686f730eafa4434380c1512ebeaf" :commit "da5fb03" :description "Resolves test expressions with restricted scope: builtins, base library, shapes library, and the symbol under test. Tracks refs via *[]Ref parameter so test dependencies are recorded in the node's Refs for cascade propagation. Mirrors resolveAST structure but with stricter symbol lookup."))
 
-(test anchor-resolve-test-ast "has-anchor-shape" (let (a anchor-resolve-test-ast) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-resolve-test-ast "has-anchor-shape" (anchor-shape? anchor-resolve-test-ast))
 
 (define anchor-send-record (dict :symbol "anchor-send-record" :name "SendRecord" :file "core/trace.go" :scope "SendRecord" :hash "sha256:84d0c1c17cd7034a7fa003617d2a8760ebf638210f46a6c34c2273ec8af55b57" :commit "78012b0" :description "Single module send: module ID, request value, response value."))
 
 (define anchor-symbol-status-type (dict :symbol "anchor-symbol-status-type" :name "SymbolStatus" :file "core/graph.go" :scope "SymbolStatus" :hash "sha256:cf7c3bd08cc163400b8e8360f92dd7e7857d7488a720b83f8696b265bc8db87a" :commit "8a06d55" :description "SymbolStatus type: int enum with StatusUntested (0), StatusGreen (1), StatusRed (2). Tracks the contract state of a symbol."))
 
-(test anchor-symbol-status-type "has-anchor-shape" (let (a anchor-symbol-status-type) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-symbol-status-type "has-anchor-shape" (anchor-shape? anchor-symbol-status-type))
 
 (define anchor-test-input (dict :symbol "anchor-test-input" :name "TestInput" :file "core/graph.go" :scope "TestInput" :hash "sha256:0482c9c5497d9ae9d313592bbe26a36514e2a12391ce97abce6f50f250a8c5da" :commit "8a06d55" :description "Input struct for tests during define: Name (label) and Expr (expression string). Converted to GraphNodeTest after parsing and resolution."))
 
-(test anchor-test-input "has-anchor-shape" (let (a anchor-test-input) (and (not (nil? (get a :symbol))) (not (nil? (get a :name))) (not (nil? (get a :file))) (not (nil? (get a :scope))) (not (nil? (get a :hash))) (not (nil? (get a :commit))) (not (nil? (get a :description))))))
+(test anchor-test-input "has-anchor-shape" (anchor-shape? anchor-test-input))
 
 (define anchor-trace (dict :symbol "anchor-trace" :name "Trace" :file "core/trace.go" :scope "Trace" :hash "sha256:1728e8ef8eb923544f0012a2d3f81f80280c798f543d5a8972dbf9e1e0e8ca05" :commit "78012b0" :description "Boundary snapshot: entry node ID, args, module sends, result/error, timestamp."))
 
@@ -236,73 +236,73 @@
 
 (define arch-core-api-contract-handlers (dict :symbol "arch-core-api-contract-handlers" :name "Contract Handlers" :description "Core API handlers for contract and define operations with auto-cascade. handleDefine calls Graph.DefineWithTests and automatically triggers RefreshAll on redefine. handleRefine calls Graph.Refine and automatically triggers RefreshAll when propagation is indicated. Both return cascade results (refreshed, red, stale) inline. handleSymbolStatus queries a single symbol's green/red/untested status. handleRedSymbols and handleGreenSymbols return sorted lists. handleRefreshAll extracts targets and dry flag, delegates to Graph.RefreshAll." :keywords (list "handleDefine" "handleRefine" "handleSymbolStatus" "handleRedSymbols" "handleGreenSymbols" "handleRefreshAll" "contract" "API" "handler" "auto-cascade") :anchors (list anchor-handle-define anchor-handle-refine anchor-handle-symbol-status anchor-handle-red-symbols anchor-handle-green-symbols anchor-handle-refresh-all) :see-also (list (link 'arch-core-api) (link 'arch-graph-refine) (link 'arch-graph-symbol-status) (link 'arch-graph-cascade))))
 
-(test arch-core-api-contract-handlers "has-concept-shape" (let (c arch-core-api-contract-handlers) (and (not (nil? (get c :symbol))) (not (nil? (get c :name))) (not (nil? (get c :description))) (not (nil? (get c :keywords))) (not (nil? (get c :anchors))) (not (empty? (get c :anchors))))))
+(test arch-core-api-contract-handlers "has-concept-shape" (concept-shape? arch-core-api-contract-handlers))
 
 (define arch-core-api (dict :symbol "arch-core-api" :name "Core API" :description "Request/response dispatcher at the heart of the system. The Core struct owns the graph, module registry, and trace buffer. All graph mutations are serialized through a single actor goroutine (actorLoop) that reads from a requests channel. handleRequest is the main dispatch switch routing ops (eval, define, refine, delete, refresh-all, symbol-status, red-symbols, green-symbols, library ops, fuel, clear, source, promote) to specific handlers. The wire protocol (WriteMsg/ReadMsg) uses 4-byte big-endian length prefix + JSON body over unix domain sockets. Three socket types: CLI (client requests), module (outbound to modules), and callback (inbound from modules)." :keywords (list "Core" "API" "dispatch" "handleRequest" "actorLoop" "actor" "socket" "request" "response" "wire protocol" "WriteMsg" "ReadMsg" "JSON" "refine" "symbol-status" "red-symbols" "green-symbols") :anchors (list anchor-core anchor-handle-request anchor-actor-loop anchor-handle-eval anchor-write-msg anchor-read-msg) :sub-concepts (list arch-core-api-contract-handlers) :interactions (list) :see-also (list (link 'arch-evaluator) (link 'arch-graph) (link 'arch-modules) (link 'arch-libraries) (link 'arch-traces) (link 'arch-mcp))))
 
-(test arch-core-api "has-concept-shape" (let (c arch-core-api) (and (not (nil? (get c :symbol))) (not (nil? (get c :name))) (not (nil? (get c :description))) (not (nil? (get c :keywords))) (not (nil? (get c :anchors))) (not (empty? (get c :anchors))))))
+(test arch-core-api "has-concept-shape" (concept-shape? arch-core-api))
 
 (define arch-eval-graph-interaction (dict :symbol "arch-eval-graph-interaction" :name "Evaluator ↔ Graph" :description "The evaluator resolves node references via ResolveNode on every NodeRef encountered in evalStep. At define time, the graph's resolveAST transforms symbols into NodeRef/NodeBuiltin before the evaluator sees them. The evaluator tracks currentNodeID for error attribution and trace context." :keywords (list "resolve" "node-ref" "ResolveNode" "ResolveAST" "currentNodeID" "symbol resolution" "define time") :anchors (list anchor-resolve-symbol) :concepts (list (link 'arch-evaluator) (link 'arch-graph))))
 
-(test arch-eval-graph-interaction "has-interaction-shape" (let (i arch-eval-graph-interaction) (and (not (nil? (get i :symbol))) (not (nil? (get i :name))) (not (nil? (get i :description))) (not (nil? (get i :keywords))) (not (nil? (get i :anchors))) (not (nil? (get i :concepts))))))
+(test arch-eval-graph-interaction "has-interaction-shape" (interaction-shape? arch-eval-graph-interaction))
 
 (define arch-eval-step-debugger-interaction (dict :symbol "arch-eval-step-debugger-interaction" :name "Evaluator ↔ Step Debugger" :description "The step debugger wraps evalStep to allow single-stepping through evaluation. evalState is serialized to/from logos Values via evalStateToValue and valueToEvalState, enabling suspended evaluation that persists across calls. Each frame kind has its own serialization logic." :keywords (list "step" "debugger" "serialize" "suspend" "resume" "evalState" "frame serialization" "step-eval" "step-continue") :anchors (list anchor-eval-state-to-value anchor-value-to-eval-state) :concepts (list (link 'arch-evaluator) (link 'arch-step-debugger))))
 
-(test arch-eval-step-debugger-interaction "has-interaction-shape" (let (i arch-eval-step-debugger-interaction) (and (not (nil? (get i :symbol))) (not (nil? (get i :name))) (not (nil? (get i :description))) (not (nil? (get i :keywords))) (not (nil? (get i :anchors))) (not (nil? (get i :concepts))))))
+(test arch-eval-step-debugger-interaction "has-interaction-shape" (interaction-shape? arch-eval-step-debugger-interaction))
 
 (define arch-eval-types-interaction (dict :symbol "arch-eval-types-interaction" :name "Evaluator ↔ Types" :description "The evaluator is the primary producer and consumer of Values. evalStep dispatches on node kind to produce typed Values (IntVal, BoolVal, etc.), uses Value.Truthy() for conditionals, and captures scope as map[string]Value for closures. nodeToValue/valueToNode provide round-trip AST conversion for quote and form expansion." :keywords (list "Value" "type dispatch" "Truthy" "closure" "scope" "nodeToValue" "valueToNode" "AST conversion" "quote" "form expansion") :anchors (list anchor-node-to-value anchor-value-to-node anchor-data-builtins) :concepts (list (link 'arch-evaluator) (link 'arch-types))))
 
-(test arch-eval-types-interaction "has-interaction-shape" (let (i arch-eval-types-interaction) (and (not (nil? (get i :symbol))) (not (nil? (get i :name))) (not (nil? (get i :description))) (not (nil? (get i :keywords))) (not (nil? (get i :anchors))) (not (nil? (get i :concepts))))))
+(test arch-eval-types-interaction "has-interaction-shape" (interaction-shape? arch-eval-types-interaction))
 
 (define arch-evaluator (dict :symbol "arch-evaluator" :name "Evaluator" :description "Frame-based iterative evaluator with no Go recursion. The core state machine (evalStep) processes one iteration per call: dispatches on AST node kind during the evaluation phase, then pops and processes stack frames during the value phase. 14 frame kinds encode all evaluation contexts — function calls, conditionals, let bindings, loop/recur, form expansion, apply, and sequential execution. The frame stack replaces the Go call stack, eliminating stack overflow risk and enabling the step debugger to suspend and resume evaluation. Re-entrant via CallFnWithValues for form expansion and sort-by." :keywords (list "evaluator" "eval" "frame" "stack" "iterative" "state machine" "evalStep" "evalLoop" "fuel" "re-entrant") :anchors (list anchor-evaluator anchor-eval-step anchor-eval-loop anchor-eval-loop-with anchor-frame anchor-eval-state anchor-enter-fn-body anchor-handle-form-call anchor-call-fn-with-values) :interactions (list arch-eval-graph-interaction arch-eval-step-debugger-interaction arch-eval-types-interaction) :see-also (list (link 'arch-parser) (link 'arch-libraries) (link 'arch-traces) (link 'lang-form-loop) (link 'lang-form-fn) (link 'lang-form-form) (link 'lang-form-if) (link 'lang-form-let) (link 'lang-concept-closures) (link 'lang-concept-iteration) (link 'lang-concept-define-time))))
 
-(test arch-evaluator "has-concept-shape" (let (c arch-evaluator) (and (not (nil? (get c :symbol))) (not (nil? (get c :name))) (not (nil? (get c :description))) (not (nil? (get c :keywords))) (not (nil? (get c :anchors))) (not (empty? (get c :anchors))))))
+(test arch-evaluator "has-concept-shape" (concept-shape? arch-evaluator))
 
 (define arch-graph-cascade (dict :symbol "arch-graph-cascade" :name "Cascade" :description "When a symbol changes, RefreshAll dispatches to refreshAllLive for the live cascade. BFS through dependents with circuit breaker: contracted symbols (have tests) are re-resolved and their tests run — pass → new Green node + continue propagation, fail → Red + stop branch. Untested symbols become stale + stop (no auto-refresh without contract). RefreshResult collects three lists: Refreshed, Red, Stale. Red is the circuit breaker — it prevents cascading failures and marks the LLM's reconciliation work list." :keywords (list "cascade" "circuit breaker" "RefreshAll" "refreshAllLive" "BFS" "propagation" "auto-refresh" "Green" "Red" "stale" "RefreshResult") :anchors (list anchor-refresh-all anchor-refresh-all-live anchor-refresh-result) :see-also (list (link 'arch-graph) (link 'arch-graph-symbol-status) (link 'arch-graph-refine))))
 
-(test arch-graph-cascade "has-concept-shape" (let (c arch-graph-cascade) (and (not (nil? (get c :symbol))) (not (nil? (get c :name))) (not (nil? (get c :description))) (not (nil? (get c :keywords))) (not (nil? (get c :anchors))) (not (empty? (get c :anchors))))))
+(test arch-graph-cascade "has-concept-shape" (concept-shape? arch-graph-cascade))
 
 (define arch-graph-libraries-interaction (dict :symbol "arch-graph-libraries-interaction" :name "Graph ↔ Libraries" :description "The graph persists symbols through append-only log files. Define and Delete append entries to the active log. DefineWithTests also writes (test name label expr) entries for contracted symbols. At startup, replayFile reconstructs graph state by re-parsing and re-resolving each entry including tests. LibraryCompact rewrites a library to contain only live symbols in dependency order with their test entries. The graph tracks symbol ownership to prevent cross-library writes." :keywords (list "replay" "log" "append" "compact" "persist" "library" "symbolOwner" "dependency order" "test entry") :anchors (list anchor-replay-file anchor-append-log anchor-library-compact) :concepts (list (link 'arch-graph) (link 'arch-libraries))))
 
-(test arch-graph-libraries-interaction "has-interaction-shape" (let (i arch-graph-libraries-interaction) (and (not (nil? (get i :symbol))) (not (nil? (get i :name))) (not (nil? (get i :description))) (not (nil? (get i :keywords))) (not (nil? (get i :anchors))) (not (nil? (get i :concepts))))))
+(test arch-graph-libraries-interaction "has-interaction-shape" (interaction-shape? arch-graph-libraries-interaction))
 
 (define arch-graph-parser-interaction (dict :symbol "arch-graph-parser-interaction" :name "Graph ↔ Parser" :description "The graph calls Parse to convert source strings to AST in DefineWithTests, Refine, Eval, RefreshAll, and replayFile. The parser produces NodeSymbol nodes which resolveAST then converts to NodeRef (graph symbols) or NodeBuiltin (builtins). For test expressions, resolveTestAST applies restricted resolution (builtins + base + shapes + self) and tracks refs for cascade propagation. This is the bridge between textual source and the resolved dependency graph." :keywords (list "Parse" "NodeSymbol" "NodeRef" "NodeBuiltin" "source" "AST" "text to graph" "resolveTestAST" "shapes") :anchors (list anchor-resolve-ast anchor-define anchor-resolve-test-ast) :concepts (list (link 'arch-graph) (link 'arch-parser))))
 
-(test arch-graph-parser-interaction "has-interaction-shape" (let (i arch-graph-parser-interaction) (and (not (nil? (get i :symbol))) (not (nil? (get i :name))) (not (nil? (get i :description))) (not (nil? (get i :keywords))) (not (nil? (get i :anchors))) (not (nil? (get i :concepts))))))
+(test arch-graph-parser-interaction "has-interaction-shape" (interaction-shape? arch-graph-parser-interaction))
 
 (define arch-graph-refine (dict :symbol "arch-graph-refine" :name "Refine" :description "Creates a new node for an existing symbol by applying deltas. Carries forward unchanged fields from the current node (expression, tests). Supports: new expr, add test, remove test, or combinations. Runs the test gate on the resulting node. Returns a propagation flag: suppressed when both expr and tests change simultaneously (the LLM changed the rules and the code at once). Otherwise, triggers cascade via RefreshAll." :keywords (list "refine" "delta" "carry forward" "immutable update" "propagation" "suppress") :anchors (list anchor-refine) :see-also (list (link 'arch-graph) (link 'arch-graph-test-gate) (link 'arch-graph-cascade))))
 
-(test arch-graph-refine "has-concept-shape" (let (c arch-graph-refine) (and (not (nil? (get c :symbol))) (not (nil? (get c :name))) (not (nil? (get c :description))) (not (nil? (get c :keywords))) (not (nil? (get c :anchors))) (not (empty? (get c :anchors))))))
+(test arch-graph-refine "has-concept-shape" (concept-shape? arch-graph-refine))
 
 (define arch-graph-symbol-status (dict :symbol "arch-graph-symbol-status" :name "Symbol Status" :description "Symbols gain a status tracked in the symbolStatus map: untested (no contract, no auto-refresh), green (has contract, all deps current, tests pass), or red (has contract, stale deps, pinned to older version). SymbolStatus is a Go int enum. GetSymbolStatus queries a single symbol. RedSymbols and GreenSymbols return sorted lists for the LLM's work list and health overview. Status is updated during DefineWithTests, Refine, and refreshAllLive." :keywords (list "status" "green" "red" "untested" "SymbolStatus" "GetSymbolStatus" "RedSymbols" "GreenSymbols" "symbolStatus map" "work list") :anchors (list anchor-symbol-status-type anchor-get-symbol-status anchor-red-symbols anchor-green-symbols) :see-also (list (link 'arch-graph) (link 'arch-graph-cascade) (link 'arch-graph-test-gate))))
 
-(test arch-graph-symbol-status "has-concept-shape" (let (c arch-graph-symbol-status) (and (not (nil? (get c :symbol))) (not (nil? (get c :name))) (not (nil? (get c :description))) (not (nil? (get c :keywords))) (not (nil? (get c :anchors))) (not (empty? (get c :anchors))))))
+(test arch-graph-symbol-status "has-concept-shape" (concept-shape? arch-graph-symbol-status))
 
 (define arch-graph-test-gate (dict :symbol "arch-graph-test-gate" :name "Test Gate" :description "Nodes gain an optional Tests field ([]GraphNodeTest). When tests are provided to DefineWithTests, each test expression is parsed and resolved via resolveTestAST (restricted to builtins + base + shapes + self), then evaluated. All must return truthy or the define fails — no node created, no log entry written. This guarantees: a node always satisfies its own contract at creation time. Test expression refs are merged into the node's Refs, enabling refresh-all cascade through test dependencies. TestInput is the wire format; GraphNodeTest is the stored format with resolved AST." :keywords (list "test" "gate" "contract" "DefineWithTests" "resolveTestAST" "GraphNodeTest" "TestInput" "restricted scope" "builtins" "base" "shapes" "test refs") :anchors (list anchor-define-with-tests anchor-resolve-test-ast anchor-graph-node-test anchor-test-input) :see-also (list (link 'arch-graph) (link 'arch-graph-refine) (link 'arch-graph-parser-interaction))))
 
-(test arch-graph-test-gate "has-concept-shape" (let (c arch-graph-test-gate) (and (not (nil? (get c :symbol))) (not (nil? (get c :name))) (not (nil? (get c :description))) (not (nil? (get c :keywords))) (not (nil? (get c :anchors))) (not (empty? (get c :anchors))))))
+(test arch-graph-test-gate "has-concept-shape" (concept-shape? arch-graph-test-gate))
 
 (define arch-graph (dict :symbol "arch-graph" :name "Graph" :description "Dependency-tracked symbol store with contract support. Every definition creates an immutable node with a unique versioned ID (node:name-N or node:lib/name-N). DefineWithTests parses source, resolves all symbols via resolveAST (converting them to NodeRef or NodeBuiltin at define time), optionally resolves test ASTs via resolveTestAST (restricted scope: builtins + base + shapes + self), runs the test gate, stores the resolved AST with its dependency list (Refs) and Tests, and appends to the log. Test expression refs are merged into Refs for cascade propagation. Refine evolves an existing symbol with deltas (new expr, add/remove tests), carrying forward unchanged fields. The evaluator never consults the symbol table — all resolution happens here. RefreshAll propagates changes via BFS with circuit breaker: contracted symbols auto-refresh (Green) or mark Red; untested symbols stop propagation. Symbol status (green/red/untested) is tracked in symbolStatus map." :keywords (list "graph" "symbol" "node" "define" "resolve" "resolveAST" "refresh" "dependency" "immutable" "versioned" "NodeRef" "NodeBuiltin" "Ref" "GraphNode" "contract" "test" "refine" "green" "red" "circuit breaker" "resolveTestAST" "shapes" "test refs") :anchors (list anchor-graph anchor-define anchor-resolve-ast anchor-refresh-all anchor-make-node-id anchor-ref anchor-graph-node) :sub-concepts (list arch-graph-test-gate arch-graph-refine arch-graph-symbol-status arch-graph-cascade) :interactions (list arch-eval-graph-interaction arch-graph-libraries-interaction arch-graph-parser-interaction) :see-also (list (link 'arch-core-api) (link 'arch-traces) (link 'arch-types) (link 'lang-concept-define-time) (link 'lang-concept-graph))))
 
-(test arch-graph "has-concept-shape" (let (c arch-graph) (and (not (nil? (get c :symbol))) (not (nil? (get c :name))) (not (nil? (get c :description))) (not (nil? (get c :keywords))) (not (nil? (get c :anchors))) (not (empty? (get c :anchors))))))
+(test arch-graph "has-concept-shape" (concept-shape? arch-graph))
 
 (define arch-libraries-special (dict :symbol "arch-libraries-special" :name "Special Libraries" :description "Base and shapes are protected libraries with special status in the runtime. Base is always first in load order, shapes always second. Neither can be deleted via LibraryDelete. LibraryOrderSet enforces their positions. Both are accessible in test expressions via resolveTestAST — base provides core utilities, shapes provides data validation predicates. Shapes is auto-created by loadLibraries on first startup if missing." :keywords (list "base" "shapes" "protected" "special" "test scope" "resolveTestAST" "auto-create" "load order") :anchors (list anchor-load-libraries anchor-resolve-test-ast) :see-also (list (link 'arch-graph-test-gate))))
 
 (define arch-libraries (dict :symbol "arch-libraries" :name "Libraries" :description "Persistent symbol storage via append-only log files. Each library is a file of (define name expr), (test name label expr), and (delete name) entries. At startup, loadLibraries reads the manifest (library-order.txt) and replays each library in order. LibraryCreate/Open/Close manage the lifecycle: opening a library switches the active write target so defines go to the library file instead of the session log. LibraryCompact rewrites a library to contain only live symbols in dependency order, including test entries. Symbol ownership (symbolOwner map) prevents cross-library writes. Base and shapes are protected libraries with special status. The session log captures ephemeral definitions not assigned to any library." :keywords (list "library" "persist" "log" "replay" "manifest" "compact" "create" "open" "close" "symbolOwner" "append-only" "dependency order" "test entry" "base" "shapes" "protected") :anchors (list anchor-load-libraries anchor-library-create anchor-library-open anchor-library-close anchor-read-manifest anchor-replay-file anchor-append-log anchor-library-compact) :sub-concepts (list arch-libraries-special) :interactions (list arch-graph-libraries-interaction) :see-also (list (link 'arch-core-api) (link 'arch-graph) (link 'arch-parser))))
 
-(test arch-libraries "has-concept-shape" (let (c arch-libraries) (and (not (nil? (get c :symbol))) (not (nil? (get c :name))) (not (nil? (get c :description))) (not (nil? (get c :keywords))) (not (nil? (get c :anchors))) (not (empty? (get c :anchors))))))
+(test arch-libraries "has-concept-shape" (concept-shape? arch-libraries))
 
 (define arch-mcp (dict :symbol "arch-mcp" :name "MCP Server" :description "Lightweight proxy exposing logos operations as MCP tools for Claude Code. A separate binary (mcp-logos) that connects to core via the CLI socket. 16 tools map 1:1 to core ops: eval, define, delete, refresh-all, 8 library lifecycle ops, clear, set-fuel, get-fuel, and manual. Each handler extracts parameters, builds a request dict with an op field, sends via the CLI socket using the same wire protocol (4-byte length prefix + JSON), and formats the response as an MCP CallToolResult." :keywords (list "MCP" "Claude Code" "tool" "proxy" "CLI socket" "mcp-logos" "eval" "define" "library") :anchors (list anchor-mcp-send anchor-mcp-format-result) :interactions (list) :see-also (list (link 'arch-core-api) (link 'arch-libraries))))
 
-(test arch-mcp "has-concept-shape" (let (c arch-mcp) (and (not (nil? (get c :symbol))) (not (nil? (get c :name))) (not (nil? (get c :description))) (not (nil? (get c :keywords))) (not (nil? (get c :anchors))) (not (empty? (get c :anchors))))))
+(test arch-mcp "has-concept-shape" (concept-shape? arch-mcp))
 
 (define arch-modules (dict :symbol "arch-modules" :name "Modules" :description "Microkernel module system. External OS processes connect over unix domain sockets, discover themselves via a handshake (core sends empty request, module responds with name + manual), and are registered in the modules map. The send builtin lets logos code call module operations during eval — it serializes requests to JSON, writes to the module socket, reads the response, and records the exchange in the active trace. Modules can also call back to core via the callback socket, which routes through the actor loop to evaluate an on-request handler. Per-module mutex serializes socket reads/writes." :keywords (list "module" "send" "socket" "handshake" "discovery" "callback" "ModuleInfo" "microkernel" "external process" "JSON") :anchors (list anchor-module-info anchor-handle-module-connection anchor-builtin-send anchor-handle-callback) :interactions (list) :see-also (list (link 'arch-core-api) (link 'arch-evaluator) (link 'arch-traces) (link 'arch-types))))
 
-(test arch-modules "has-concept-shape" (let (c arch-modules) (and (not (nil? (get c :symbol))) (not (nil? (get c :name))) (not (nil? (get c :description))) (not (nil? (get c :keywords))) (not (nil? (get c :anchors))) (not (empty? (get c :anchors))))))
+(test arch-modules "has-concept-shape" (concept-shape? arch-modules))
 
 (define arch-parser (dict :symbol "arch-parser" :name "Parser" :description "S-expression parser converting text to AST. Parse is the entry point: it creates a parser struct (rune slice + position), dispatches via parseNode to quote/list/string/atom handlers, and produces a tree of Node structs. The parser is simple and stateless — it produces NodeSymbol for identifiers, which are later converted to NodeRef/NodeBuiltin by the graph's resolveAST. Node kinds cover literals (int, float, bool, string, nil, keyword), structure (list), and post-resolution types (ref, builtin)." :keywords (list "parser" "Parse" "AST" "Node" "NodeKind" "S-expression" "parseNode" "atom" "list" "quote" "string" "symbol") :anchors (list anchor-parse anchor-parser-struct anchor-parse-node anchor-node anchor-node-kind) :interactions (list arch-graph-parser-interaction) :see-also (list (link 'arch-evaluator) (link 'arch-types) (link 'lang-syntax))))
 
-(test arch-parser "has-concept-shape" (let (c arch-parser) (and (not (nil? (get c :symbol))) (not (nil? (get c :name))) (not (nil? (get c :description))) (not (nil? (get c :keywords))) (not (nil? (get c :anchors))) (not (empty? (get c :anchors))))))
+(test arch-parser "has-concept-shape" (concept-shape? arch-parser))
 
 (define arch-resolve-lines (fn (anchors)
   (if (empty? anchors)
@@ -394,19 +394,19 @@
 
 (define arch-step-debugger (dict :symbol "arch-step-debugger" :name "Step Debugger" :description "Serialization layer atop the frame-based evaluator enabling single-step execution. builtinStepEval parses an expression and returns the initial evalState as a logos map. builtinStepContinue deserializes a state map, runs one evalStep, and re-serializes the result. The serialization layer (frameToValue/valueToFrame, evalStateToValue/valueToEvalState) handles all 14 frame kinds with their variant-specific fields. Frame bindings are reconnected to shared scope maps after deserialization to maintain the evaluator's invariant. State maps expose :status (:evaluating/:returning/:done/:error) for external inspection." :keywords (list "step" "debugger" "step-eval" "step-continue" "serialize" "deserialize" "frame" "evalState" "suspend" "resume" "single-step") :anchors (list anchor-builtin-step-eval anchor-builtin-step-continue anchor-frame-to-value anchor-value-to-frame anchor-eval-state-to-value anchor-value-to-eval-state) :interactions (list arch-eval-step-debugger-interaction) :see-also (list (link 'arch-evaluator) (link 'arch-parser) (link 'arch-core-api) (link 'lang-builtin-step-eval))))
 
-(test arch-step-debugger "has-concept-shape" (let (c arch-step-debugger) (and (not (nil? (get c :symbol))) (not (nil? (get c :name))) (not (nil? (get c :description))) (not (nil? (get c :keywords))) (not (nil? (get c :anchors))) (not (empty? (get c :anchors))))))
+(test arch-step-debugger "has-concept-shape" (concept-shape? arch-step-debugger))
 
 (define arch-traces (dict :symbol "arch-traces" :name "Traces" :description "Evaluation boundary snapshots. Each Trace captures entry node, args, module sends (as SendRecords), result/error, and timestamp. Created by Core during external evals (handleEval, callback handlers). The send builtin appends SendRecords to the active trace during eval. AssertError propagates assertion failures with the currentNodeID for attribution. appendTrace enforces a ring buffer cap (maxTraces=1000). ToValue serializes traces for the traces builtin. Traces capture boundaries, not full computation — replay from boundaries reproduces the full eval since the graph is deterministic." :keywords (list "trace" "Trace" "SendRecord" "assert" "AssertError" "boundary" "snapshot" "module send" "ring buffer" "appendTrace" "replay") :anchors (list anchor-trace anchor-send-record anchor-assert-error anchor-trace-to-value anchor-append-trace) :interactions (list) :see-also (list (link 'arch-evaluator) (link 'arch-modules) (link 'arch-core-api))))
 
-(test arch-traces "has-concept-shape" (let (c arch-traces) (and (not (nil? (get c :symbol))) (not (nil? (get c :name))) (not (nil? (get c :description))) (not (nil? (get c :keywords))) (not (nil? (get c :anchors))) (not (empty? (get c :anchors))))))
+(test arch-traces "has-concept-shape" (concept-shape? arch-traces))
 
 (define arch-types (dict :symbol "arch-types" :name "Types" :description "Runtime value representation: a single tagged-union struct (Value) with a Kind discriminant and type-specific fields. 14 kinds cover primitives (int, float, bool, string, keyword, nil), references (symbol, node-ref, link), collections (list, map), and callables (fn, form, builtin). FnValue holds function metadata including closure (a snapshot of the enclosing scope). Truthy implements nil-as-flow: nil and false are falsy. ValuesEqual provides deep recursive equality. ValueToGo/GoToValue handle JSON serialization with type-tagged prefixes for non-JSON types." :keywords (list "Value" "ValueKind" "type" "tagged union" "FnValue" "closure" "Truthy" "equality" "JSON" "serialization" "ValueToGo" "GoToValue") :anchors (list anchor-value anchor-value-kind anchor-fn-value anchor-truthy anchor-values-equal anchor-value-to-go anchor-go-to-value) :interactions (list arch-eval-types-interaction) :see-also (list (link 'arch-parser) (link 'arch-modules) (link 'lang-types))))
 
-(test arch-types "has-concept-shape" (let (c arch-types) (and (not (nil? (get c :symbol))) (not (nil? (get c :name))) (not (nil? (get c :description))) (not (nil? (get c :keywords))) (not (nil? (get c :anchors))) (not (empty? (get c :anchors))))))
+(test arch-types "has-concept-shape" (concept-shape? arch-types))
 
 (define arch (dict :symbol "arch" :name "Logos Architecture Reference" :description "Architecture documentation for the logos v3 runtime. Each concept node describes a subsystem with code anchors validated against the source via mod-go. Interaction nodes document how subsystems connect, with their own anchors at boundary points. Sub-concept nodes add detail within a subsystem. Cross-references to the lang library link implementation to language semantics." :members (list arch-evaluator arch-graph arch-parser arch-types arch-core-api arch-modules arch-libraries arch-step-debugger arch-traces arch-mcp)))
 
-(test arch "has-root-shape" (let (r arch) (and (not (nil? (get r :symbol))) (not (nil? (get r :name))) (not (nil? (get r :description))) (not (nil? (get r :members))) (not (empty? (get r :members))))))
+(test arch "has-root-shape" (root-shape? arch))
 
 (define arch-search (fn (query & opts)
   (let (depth (if (empty? opts) 1 (head opts))
