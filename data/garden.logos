@@ -46,6 +46,10 @@
 
 (test garden-graph-macro-language "has-garden-item-shape" (garden-item-shape? garden-graph-macro-language))
 
+(define garden-graph-web-explorer (dict :symbol "garden-graph-web-explorer" :name "Graph web explorer" :description "Generic web UI framework for browsing parts of the graph. Libraries like lang, arch, and garden share patterns: root with members, nodes with name/description/keywords, search functions, describe functions. A framework could render any library following these conventions, customized with a few adapter functions per library (how to render a node, what columns to show in a list, etc.). Builds on mod-http-server + web library. Earlier prototype showed lang types as an SPA but wasn't maintained." :status :seed :tags (list :apps :dx) :see-also (list (link 'garden-bespoke-chat-ui) (link 'garden-generalize-describe))))
+
+(test garden-graph-web-explorer "has-garden-item-shape" (garden-item-shape? garden-graph-web-explorer))
+
 (define garden-http-client-module (dict :symbol "garden-http-client-module" :name "HTTP client module" :description "Call external APIs, webhooks, Anthropic API. Key enabler for agents-as-primitives." :status :sprout :tags (list :modules)))
 
 (test garden-http-client-module "has-garden-item-shape" (garden-item-shape? garden-http-client-module))
@@ -55,6 +59,10 @@
 (test garden-inspect "is-fn" (fn? garden-inspect))
 
 (test garden-inspect "produces-string" (string? (garden-inspect (dict :symbol "x" :name "Test" :description "A test item." :status :seed :tags (list :core)))))
+
+(define garden-lang-contracts (dict :symbol "garden-lang-contracts" :name "Migrate lang to symbol contracts" :description "Lang nodes have internal test dicts (:tests, :examples) evaluated by lang-validate/lang-run-test, but these aren't runtime symbol contracts. Two angles: (1) shape predicates for the various lang node types (syntax, type, builtin, concept, example, test), (2) promote the internal test expressions to actual (test ...) entries so the runtime gates on them and cascade tracks them. The second is more interesting — it would make lang's 263 tests part of the contract system, so changing a builtin definition cascades through its lang documentation automatically." :status :seed :tags (list :libraries :core)))
+
+(test garden-lang-contracts "has-garden-item-shape" (garden-item-shape? garden-lang-contracts))
 
 (define garden-library-migration-skill (dict :symbol "garden-library-migration-skill" :name "Library migration skill" :description "Move symbols from session to library via subagent." :status :seed :tags (list :dx)))
 
@@ -166,33 +174,11 @@
 
 (test garden-validation-sweep-skill "has-garden-item-shape" (garden-item-shape? garden-validation-sweep-skill))
 
-(define garden-virtual-members (dict :symbol "garden-virtual-members" :name "Virtual member views" :description "Nodes matching a predicate appear as members of a collection without being listed explicitly. Eliminates the friction of maintaining :members lists manually every time a node is added. Could work like a database view — define the predicate, get a live list." :status :seed :tags (list :core)))
+(define garden-virtual-members (dict :symbol "garden-virtual-members" :name "Graph views" :description "A view is a graph-level construct (not language-level) defined by a predicate function. When any symbol is defined/refined/deleted, the graph runs active view predicates against it and updates membership. The view's Refs are real graph dependencies maintained by the graph, not source code — so cascade propagates through views correctly. This replaces manually maintained :members lists. Paired with removing symbols/node-expr builtins from the language (move to debug only) — nodes should only know about symbols explicitly coded into them or discovered via views. The graph does the bookkeeping, not eval-time backdoors." :status :sprout :tags (list :core) :see-also (list (link 'garden-graph-web-explorer) (link 'garden-generalize-describe))))
 
 (test garden-virtual-members "has-garden-item-shape" (garden-item-shape? garden-virtual-members))
 
-(define garden (dict :symbol "garden" :name "Garden" :description "Project backlog as graph nodes. Items have lifecycle (seed, sprout, growing, harvest, compost), tags, and optional effort/dependencies/outcome. Query with garden-survey, garden-search, garden-inspect." :members (list garden-symbol-contracts garden-refine-op garden-toposort-compact garden-reified-shapes garden-refresh-blank-line-bug garden-stale-dependent-reporting garden-eval-builtin garden-atomic-multi-define garden-concurrency garden-lower-case-builtin garden-ast-patch-diff garden-per-module-callbacks garden-split-arg-order garden-http-client-module garden-scheduler-module garden-mcp-client-module garden-mcp-server-module garden-shared-docs-library garden-logos-level-guides garden-libs-library garden-nabu-rebuild garden-nisaba garden-garden garden-mcp-response-hooks garden-optimize-mcp-response garden-purpose-built-mcp-tools garden-batch-define-skill garden-library-migration-skill garden-validation-sweep-skill garden-subagent-leverage garden-generalize-describe garden-multi-session garden-search-index-module garden-sub-concept-layer garden-builtin-anchors garden-bespoke-chat-ui garden-virtual-members garden-library-namespaces garden-graph-macro-language garden-constrained-subagents garden-graph-branching)))
-
-(test garden "has-root-shape" (root-shape? garden))
-
-(define garden-search (fn (query) (let (members (get garden :members) matched (filter (fn (item) (let (in-name (contains? (get item :name) query) in-desc (contains? (get item :description) query) in-tags (fold (fn (acc t) (or acc (contains? (to-string t) query))) false (get item :tags))) (or in-name (or in-desc in-tags)))) members)) (map (fn (item) (dict :name (get item :name) :symbol (get item :symbol) :status (get item :status))) matched))))
-
-(test garden-search "finds-by-name" (gt (len (garden-search "module")) 0))
-
-(test garden-search "returns-empty-for-no-match" (eq 0 (len (garden-search "zzzzzznothing"))))
-
-(define garden-survey (fn (& opts) (let (members (get garden :members) filter-type (if (empty? opts) nil (head opts)) filter-val (if (or (nil? filter-type) (empty? (rest opts))) nil (head (rest opts))) matches (if (nil? filter-type) members (filter (fn (item) (cond (eq filter-type :status) (eq (get item :status) filter-val) (eq filter-type :tag) (member? (get item :tags) filter-val) true true)) members))) (map (fn (item) (dict :name (get item :name) :symbol (get item :symbol) :status (get item :status) :tags (get item :tags))) matches))))
-
-(test garden-survey "filters-by-tag" (gt (len (garden-survey :tag :core)) 0))
-
-(test garden-survey "returns-all" (not (empty? (garden-survey))))
-
-(test garden-survey "filters-by-status" (not (empty? (garden-survey :status :harvest))))
-
-(define garden-lang-contracts (dict :symbol "garden-lang-contracts" :name "Migrate lang to symbol contracts" :description "Lang nodes have internal test dicts (:tests, :examples) evaluated by lang-validate/lang-run-test, but these aren't runtime symbol contracts. Two angles: (1) shape predicates for the various lang node types (syntax, type, builtin, concept, example, test), (2) promote the internal test expressions to actual (test ...) entries so the runtime gates on them and cascade tracks them. The second is more interesting — it would make lang's 263 tests part of the contract system, so changing a builtin definition cascades through its lang documentation automatically." :status :seed :tags (list :libraries :core)))
-
-(test garden-lang-contracts "has-garden-item-shape" (garden-item-shape? garden-lang-contracts))
-
-(define garden (dict :symbol "garden" :name "Garden" :description "Project backlog as graph nodes. Items have lifecycle (seed, sprout, growing, harvest, compost), tags, and optional effort/dependencies/outcome. Query with garden-survey, garden-search, garden-inspect." :members (list garden-symbol-contracts garden-refine-op garden-toposort-compact garden-reified-shapes garden-refresh-blank-line-bug garden-stale-dependent-reporting garden-eval-builtin garden-atomic-multi-define garden-concurrency garden-lower-case-builtin garden-ast-patch-diff garden-per-module-callbacks garden-split-arg-order garden-http-client-module garden-scheduler-module garden-mcp-client-module garden-mcp-server-module garden-shared-docs-library garden-logos-level-guides garden-libs-library garden-nabu-rebuild garden-nisaba garden-garden garden-mcp-response-hooks garden-optimize-mcp-response garden-purpose-built-mcp-tools garden-batch-define-skill garden-library-migration-skill garden-validation-sweep-skill garden-subagent-leverage garden-generalize-describe garden-multi-session garden-search-index-module garden-sub-concept-layer garden-builtin-anchors garden-bespoke-chat-ui garden-virtual-members garden-library-namespaces garden-graph-macro-language garden-constrained-subagents garden-graph-branching garden-lang-contracts)))
+(define garden (dict :symbol "garden" :name "Garden" :description "Project backlog as graph nodes. Items have lifecycle (seed, sprout, growing, harvest, compost), tags, and optional effort/dependencies/outcome. Query with garden-survey, garden-search, garden-inspect." :members (list garden-symbol-contracts garden-refine-op garden-toposort-compact garden-reified-shapes garden-refresh-blank-line-bug garden-stale-dependent-reporting garden-eval-builtin garden-atomic-multi-define garden-concurrency garden-lower-case-builtin garden-ast-patch-diff garden-per-module-callbacks garden-split-arg-order garden-http-client-module garden-scheduler-module garden-mcp-client-module garden-mcp-server-module garden-shared-docs-library garden-logos-level-guides garden-libs-library garden-nabu-rebuild garden-nisaba garden-garden garden-mcp-response-hooks garden-optimize-mcp-response garden-purpose-built-mcp-tools garden-batch-define-skill garden-library-migration-skill garden-validation-sweep-skill garden-subagent-leverage garden-generalize-describe garden-multi-session garden-search-index-module garden-sub-concept-layer garden-builtin-anchors garden-bespoke-chat-ui garden-virtual-members garden-library-namespaces garden-graph-macro-language garden-constrained-subagents garden-graph-branching garden-lang-contracts garden-graph-web-explorer)))
 
 (test garden "has-root-shape" (root-shape? garden))
 
