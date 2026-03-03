@@ -1801,11 +1801,11 @@ func builtinSplitOnce(args []Value) (Value, error) {
 	if args[0].Kind != ValString || args[1].Kind != ValString {
 		return Value{}, fmt.Errorf("split-once: expected two Strings, got %s and %s", args[0].KindName(), args[1].KindName())
 	}
-	needle := args[0].Str
+	haystack := args[0].Str
+	needle := args[1].Str
 	if needle == "" {
 		return Value{}, fmt.Errorf("split-once: needle must not be empty")
 	}
-	haystack := args[1].Str
 	idx := strings.Index(haystack, needle)
 	if idx == -1 {
 		return NilVal(), nil
