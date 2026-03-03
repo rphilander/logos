@@ -10,6 +10,10 @@
 
 (test garden-batch-define-skill "has-garden-item-shape" (garden-item-shape? garden-batch-define-skill))
 
+(define garden-bespoke-chat-ui (dict :symbol "garden-bespoke-chat-ui" :name "Bespoke AI chat interfaces" :description "Web-based chat UIs specialized for specific workflows. Nicer layout, colors, and domain-specific presentation than a generic terminal. Examples: garden scrubbing with visual item cards, arch exploration with diagrams, roadmap planning with drag-and-drop. Built on mod-http-server + web library, backed by an LLM API." :status :seed :tags (list :apps :core)))
+
+(test garden-bespoke-chat-ui "has-garden-item-shape" (garden-item-shape? garden-bespoke-chat-ui))
+
 (define garden-builtin-anchors (dict :symbol "garden-builtin-anchors" :name "Builtin source anchors in arch" :description "Add an arch sub-concept under arch-evaluator that maps each builtin to its Go implementation anchor. Covers data builtins (eval.go), graph builtins (graph.go), and core-bound builtins (core.go). Bridges the gap between lang (what builtins do) and arch (where they live in Go)." :status :seed :tags (list :arch) :see-also (list (link 'garden-sub-concept-layer))))
 
 (test garden-builtin-anchors "has-garden-item-shape" (garden-item-shape? garden-builtin-anchors))
@@ -17,6 +21,10 @@
 (define garden-concurrency (dict :symbol "garden-concurrency" :name "Concurrency" :description "Make the graph safe for concurrent access. Go goroutines/channels as substrate. Required for agents, schedulers, concurrent HTTP handlers. Immutable node design helps." :status :seed :tags (list :core)))
 
 (test garden-concurrency "has-garden-item-shape" (garden-item-shape? garden-concurrency))
+
+(define garden-constrained-subagents (dict :symbol "garden-constrained-subagents" :name "Constrained subagents" :description "Spin up subagents with a reduced scope: fewer tools, access to specific libraries only, bespoke tools defined for the task. Lets us delegate tedious mechanical work (batch migrations, test authoring, validation sweeps) without burning primary context or risking off-trail damage. The constraint model is the safety mechanism — instead of safeguarding a powerful macro language, give a simple agent a narrow set of things it can do." :status :seed :tags (list :dx :core) :blocked-by (list (dict :item (link 'garden-http-client-module) :reason "Subagents need to call an LLM API")) :see-also (list (link 'garden-graph-macro-language) (link 'garden-subagent-leverage) (link 'garden-bespoke-chat-ui))))
+
+(test garden-constrained-subagents "has-garden-item-shape" (garden-item-shape? garden-constrained-subagents))
 
 (define garden-eval-builtin (dict :symbol "garden-eval-builtin" :name "eval builtin" :description "Evaluate an arbitrary expression string from within logos. link/follow covers named symbols but not general expressions." :status :seed :tags (list :core)))
 
@@ -29,6 +37,14 @@
 (define garden-generalize-describe (dict :symbol "garden-generalize-describe" :name "Generalize lang-describe" :description "Any node following the name/description/examples/tests/members convention could use it. Not specific to lang nodes." :status :seed :tags (list :dx :libraries)))
 
 (test garden-generalize-describe "has-garden-item-shape" (garden-item-shape? garden-generalize-describe))
+
+(define garden-graph-branching (dict :symbol "garden-graph-branching" :name "Graph branching and merging" :description "Fork the graph into an isolated branch for a subagent to work in. The subagent defines, refines, and deletes symbols in its branch without affecting the main graph. When done, review and merge changes back — like git but for the symbol graph. Enables background work (e.g. a subagent categorizing HN stories into a technews library) that stays invisible until explicitly merged. Immutable nodes make diff/merge natural — each branch is just a divergent set of node IDs." :status :seed :tags (list :core) :see-also (list (link 'garden-constrained-subagents) (link 'garden-concurrency) (link 'garden-atomic-multi-define))))
+
+(test garden-graph-branching "has-garden-item-shape" (garden-item-shape? garden-graph-branching))
+
+(define garden-graph-macro-language (dict :symbol "garden-graph-macro-language" :name "Graph operation macro language" :description "Instead of ever-growing MCP verbs, a reduced macro language the LLM can use to specify compound graph operations. Batch defines, conditional updates, predicate-based transforms. Key concern: one mistake could create or destroy many nodes. Needs safeguards — dry-run preview, transaction boundaries, undo, confirmation thresholds for destructive ops." :status :seed :tags (list :core :mcp) :blocked-by (list (dict :item (link 'garden-atomic-multi-define) :reason "Transactions with rollback needed before compound operations are safe")) :see-also (list (link 'garden-constrained-subagents))))
+
+(test garden-graph-macro-language "has-garden-item-shape" (garden-item-shape? garden-graph-macro-language))
 
 (define garden-http-client-module (dict :symbol "garden-http-client-module" :name "HTTP client module" :description "Call external APIs, webhooks, Anthropic API. Key enabler for agents-as-primitives." :status :sprout :tags (list :modules)))
 
@@ -44,15 +60,19 @@
 
 (test garden-library-migration-skill "has-garden-item-shape" (garden-item-shape? garden-library-migration-skill))
 
+(define garden-library-namespaces (dict :symbol "garden-library-namespaces" :name "Library namespaces" :description "Libraries already use conventional prefixes (arch-, lang-, garden-). Could enforce and optimize this: auto-prefix symbols defined in a library, allow short names within the library, resolve qualified names across libraries. Reduces boilerplate and makes library membership explicit." :status :seed :tags (list :core)))
+
+(test garden-library-namespaces "has-garden-item-shape" (garden-item-shape? garden-library-namespaces))
+
 (define garden-libs-library (dict :symbol "garden-libs-library" :name "Libs library" :description "Document what's in base, debug, web, db libraries as graph nodes." :status :seed :tags (list :libraries)))
 
 (test garden-libs-library "has-garden-item-shape" (garden-item-shape? garden-libs-library))
 
-(define garden-logos-level-guides (dict :symbol "garden-logos-level-guides" :name "Logos-level guides" :description "How-to guides for adding a base library function, adding a lang node, adding an arch concept, creating a library. Different from current guides (which are Go-level)." :status :sprout :tags (list :libraries)))
+(define garden-logos-level-guides (dict :symbol "garden-logos-level-guides" :name "Logos-level guides" :description "How-to guides for adding a base library function, adding a lang node, adding an arch concept, creating a library. Different from current guides (which are Go-level). Composted: logos-level patterns are simple enough to pick up from context. Revisit if subagents need explicit guidance." :status :compost :tags (list :libraries)))
 
 (test garden-logos-level-guides "has-garden-item-shape" (garden-item-shape? garden-logos-level-guides))
 
-(define garden-lower-case-builtin (dict :symbol "garden-lower-case-builtin" :name "lower-case string builtin" :description "Enables case-insensitive search in lang-search and elsewhere." :status :seed :tags (list :core) :effort :small))
+(define garden-lower-case-builtin (dict :symbol "garden-lower-case-builtin" :name "lower-case string builtin" :description "Enables case-insensitive search in lang-search and elsewhere." :status :harvest :tags (list :core) :effort :small :outcome "Added builtinLowerCase to eval.go. Single arg, returns lowercased string."))
 
 (test garden-lower-case-builtin "has-garden-item-shape" (garden-item-shape? garden-lower-case-builtin))
 
@@ -60,7 +80,7 @@
 
 (test garden-mcp-client-module "has-garden-item-shape" (garden-item-shape? garden-mcp-client-module))
 
-(define garden-mcp-response-hooks (dict :symbol "garden-mcp-response-hooks" :name "MCP response hooks for context injection" :description "Open a library, get its docs. Hit an error, get relevant arch context. Close a library, trigger smoke test. Makes the MCP layer context-aware." :status :sprout :tags (list :mcp)))
+(define garden-mcp-response-hooks (dict :symbol "garden-mcp-response-hooks" :name "MCP response hooks for context injection" :description "Open a library, get its docs. Hit an error, get relevant arch context. Close a library, trigger smoke test. Composted: context injection solved more effectively via arch-aware skill and persistent memory." :status :compost :tags (list :mcp)))
 
 (test garden-mcp-response-hooks "has-garden-item-shape" (garden-item-shape? garden-mcp-response-hooks))
 
@@ -72,7 +92,7 @@
 
 (test garden-multi-session "has-garden-item-shape" (garden-item-shape? garden-multi-session))
 
-(define garden-nabu-rebuild (dict :symbol "garden-nabu-rebuild" :name "Nabu rebuild (Phase 4)" :description "LLM-driven data visualization system, rebuilt on logos v3." :status :sprout :tags (list :apps)))
+(define garden-nabu-rebuild (dict :symbol "garden-nabu-rebuild" :name "Data visualization capability" :description "Built-in data visualization in logos. Render charts, graphs, tables from graph data. Leveraged by any workflow that needs visual output, not tied to a specific application." :status :seed :tags (list :core)))
 
 (test garden-nabu-rebuild "has-garden-item-shape" (garden-item-shape? garden-nabu-rebuild))
 
@@ -104,7 +124,7 @@
 
 (test garden-reified-shapes "has-garden-item-shape" (garden-item-shape? garden-reified-shapes))
 
-(define garden-roadmap (dict :symbol "garden-roadmap" :name "Current Roadmap" :goal "Solidify the development infrastructure — contracts, shapes, architecture docs, backlog tracking — before building the next application layer." :items (list (link 'garden-sub-concept-layer) (link 'garden-refresh-blank-line-bug) (link 'garden-split-arg-order) (link 'garden-logos-level-guides))))
+(define garden-roadmap (dict :symbol "garden-roadmap" :name "Current Roadmap" :goal "Reduce friction in graph-native workflows — the garden itself is proving the pain points." :items (list (link 'garden-virtual-members) (link 'garden-sub-concept-layer) (link 'garden-refresh-blank-line-bug))))
 
 (define garden-scheduler-module (dict :symbol "garden-scheduler-module" :name "Scheduler module" :description "Cron-like triggers, delayed execution." :status :seed :tags (list :modules)))
 
@@ -122,7 +142,7 @@
 
 (test garden-split-arg-order "has-garden-item-shape" (garden-item-shape? garden-split-arg-order))
 
-(define garden-stale-dependent-reporting (dict :symbol "garden-stale-dependent-reporting" :name "Stale dependent reporting on define" :description "Include ref-by results for the superseded node in the define response. Cheap to compute, turns a hidden footgun into an explicit prompt." :status :seed :tags (list :core)))
+(define garden-stale-dependent-reporting (dict :symbol "garden-stale-dependent-reporting" :name "Link-aware change reporting" :description "Links are invisible to the cascade — a symbol can change and nodes holding (link 'that-symbol) are never notified. The runtime could track which nodes hold links to which symbols. Unclear what the right response is: informational reporting, optional cascade, or something else. Related to the broader question of what links mean for graph consistency." :status :seed :tags (list :core)))
 
 (test garden-stale-dependent-reporting "has-garden-item-shape" (garden-item-shape? garden-stale-dependent-reporting))
 
@@ -146,7 +166,11 @@
 
 (test garden-validation-sweep-skill "has-garden-item-shape" (garden-item-shape? garden-validation-sweep-skill))
 
-(define garden (dict :symbol "garden" :name "Garden" :description "Project backlog as graph nodes. Items have lifecycle (seed, sprout, growing, harvest, compost), tags, and optional effort/dependencies/outcome. Query with garden-survey, garden-search, garden-inspect." :members (list garden-symbol-contracts garden-refine-op garden-toposort-compact garden-reified-shapes garden-refresh-blank-line-bug garden-stale-dependent-reporting garden-eval-builtin garden-atomic-multi-define garden-concurrency garden-lower-case-builtin garden-ast-patch-diff garden-per-module-callbacks garden-split-arg-order garden-http-client-module garden-scheduler-module garden-mcp-client-module garden-mcp-server-module garden-shared-docs-library garden-logos-level-guides garden-libs-library garden-nabu-rebuild garden-nisaba garden-garden garden-mcp-response-hooks garden-optimize-mcp-response garden-purpose-built-mcp-tools garden-batch-define-skill garden-library-migration-skill garden-validation-sweep-skill garden-subagent-leverage garden-generalize-describe garden-multi-session garden-search-index-module garden-sub-concept-layer garden-builtin-anchors)))
+(define garden-virtual-members (dict :symbol "garden-virtual-members" :name "Virtual member views" :description "Nodes matching a predicate appear as members of a collection without being listed explicitly. Eliminates the friction of maintaining :members lists manually every time a node is added. Could work like a database view — define the predicate, get a live list." :status :seed :tags (list :core)))
+
+(test garden-virtual-members "has-garden-item-shape" (garden-item-shape? garden-virtual-members))
+
+(define garden (dict :symbol "garden" :name "Garden" :description "Project backlog as graph nodes. Items have lifecycle (seed, sprout, growing, harvest, compost), tags, and optional effort/dependencies/outcome. Query with garden-survey, garden-search, garden-inspect." :members (list garden-symbol-contracts garden-refine-op garden-toposort-compact garden-reified-shapes garden-refresh-blank-line-bug garden-stale-dependent-reporting garden-eval-builtin garden-atomic-multi-define garden-concurrency garden-lower-case-builtin garden-ast-patch-diff garden-per-module-callbacks garden-split-arg-order garden-http-client-module garden-scheduler-module garden-mcp-client-module garden-mcp-server-module garden-shared-docs-library garden-logos-level-guides garden-libs-library garden-nabu-rebuild garden-nisaba garden-garden garden-mcp-response-hooks garden-optimize-mcp-response garden-purpose-built-mcp-tools garden-batch-define-skill garden-library-migration-skill garden-validation-sweep-skill garden-subagent-leverage garden-generalize-describe garden-multi-session garden-search-index-module garden-sub-concept-layer garden-builtin-anchors garden-bespoke-chat-ui garden-virtual-members garden-library-namespaces garden-graph-macro-language garden-constrained-subagents garden-graph-branching)))
 
 (test garden "has-root-shape" (root-shape? garden))
 
