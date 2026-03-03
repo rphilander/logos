@@ -1,0 +1,6 @@
+(define test-shape? (fn (v) (and (map? v) (has? v :name))))
+
+(define test-shape? (fn (v) (and (map? v) (has? v :name) (has? v :title))))
+
+(delete test-shape?)
+

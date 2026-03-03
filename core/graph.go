@@ -247,7 +247,7 @@ func (g *Graph) DefineWithTests(name, expr string, tests []TestInput) (*GraphNod
 				gateErr = fmt.Errorf("define %s: parse test %q: %w", name, ti.Name, parseErr)
 				break
 			}
-			resolvedTest, resolveErr := g.resolveTestAST(parsedTest, name, nil)
+			resolvedTest, resolveErr := g.resolveTestAST(parsedTest, &refs, name, nil)
 			if resolveErr != nil {
 				gateErr = fmt.Errorf("define %s: resolve test %q: %w", name, ti.Name, resolveErr)
 				break
@@ -295,6 +295,7 @@ func (g *Graph) DefineWithTests(name, expr string, tests []TestInput) (*GraphNod
 		}
 
 		node.Tests = resolvedTests
+		node.Refs = refs // update after test resolution added test deps
 	}
 
 	// Commit: store node and update symbol table
@@ -430,7 +431,7 @@ func (g *Graph) Refine(name, newExpr string, addTests []TestInput, removeTests [
 			gateErr = fmt.Errorf("refine %s: parse test %q: %w", name, t.Name, parseErr)
 			break
 		}
-		resolvedTest, rErr := g.resolveTestAST(parsedTest, name, nil)
+		resolvedTest, rErr := g.resolveTestAST(parsedTest, &exprRefs, name, nil)
 		if rErr != nil {
 			gateErr = fmt.Errorf("refine %s: resolve test %q: %w", name, t.Name, rErr)
 			break
@@ -472,6 +473,7 @@ func (g *Graph) Refine(name, newExpr string, addTests []TestInput, removeTests [
 	}
 
 	// Commit
+	newNode.Refs = exprRefs // update after test resolution added test deps
 	newNode.Tests = resolvedTests
 	if len(newNode.Tests) > 0 {
 		g.symbolStatus[name] = StatusGreen
@@ -826,18 +828,20 @@ func (g *Graph) resolveAST(node *Node, refs *[]Ref, boundNames map[string]bool) 
 // resolveTestAST resolves a test expression with restricted scope:
 // only builtins, base library symbols, and the symbol under test are allowed.
 // boundNames works the same as in resolveAST (for let/fn/form params).
-func (g *Graph) resolveTestAST(node *Node, selfName string, boundNames map[string]bool) (*Node, error) {
+func (g *Graph) resolveTestAST(node *Node, refs *[]Ref, selfName string, boundNames map[string]bool) (*Node, error) {
 	switch node.Kind {
 	case NodeSymbol:
 		if boundNames[node.Str] {
 			return node, nil
 		}
 		if strings.HasPrefix(node.Str, "node:") {
+			*refs = append(*refs, Ref{Symbol: node.Str, NodeID: node.Str})
 			return &Node{Kind: NodeRef, Str: node.Str, Ref: node.Str}, nil
 		}
 		// Allow the symbol under test
 		if node.Str == selfName {
 			if nodeID, ok := g.symbols[node.Str]; ok {
+				*refs = append(*refs, Ref{Symbol: node.Str, NodeID: nodeID})
 				return &Node{Kind: NodeRef, Str: node.Str, Ref: nodeID}, nil
 			}
 			return nil, fmt.Errorf("unresolved symbol: %s", node.Str)
@@ -848,13 +852,14 @@ func (g *Graph) resolveTestAST(node *Node, selfName string, boundNames map[strin
 				return &Node{Kind: NodeBuiltin, Str: node.Str}, nil
 			}
 		}
-		// Allow base library symbols
-		if owner, exists := g.symbolOwner[node.Str]; exists && owner == "base" {
+		// Allow base and shapes library symbols
+		if owner, exists := g.symbolOwner[node.Str]; exists && (owner == "base" || owner == "shapes") {
 			if nodeID, ok := g.symbols[node.Str]; ok {
+				*refs = append(*refs, Ref{Symbol: node.Str, NodeID: nodeID})
 				return &Node{Kind: NodeRef, Str: node.Str, Ref: nodeID}, nil
 			}
 		}
-		return nil, fmt.Errorf("test expressions can only reference builtins, base library, and the symbol under test; got: %s", node.Str)
+		return nil, fmt.Errorf("test expressions can only reference builtins, base library, shapes library, and the symbol under test; got: %s", node.Str)
 
 	case NodeList:
 		if len(node.Children) == 0 {
@@ -880,7 +885,7 @@ func (g *Graph) resolveTestAST(node *Node, selfName string, boundNames map[strin
 							}
 						}
 					}
-					resolved, err := g.resolveTestAST(node.Children[2], selfName, innerBound)
+					resolved, err := g.resolveTestAST(node.Children[2], refs, selfName, innerBound)
 					if err != nil {
 						return nil, err
 					}
@@ -905,7 +910,7 @@ func (g *Graph) resolveTestAST(node *Node, selfName string, boundNames map[strin
 								nameNode := bindingsNode.Children[i]
 								newBindings[i] = nameNode
 								if i+1 < len(bindingsNode.Children) {
-									resolved, err := g.resolveTestAST(bindingsNode.Children[i+1], selfName, innerBound)
+									resolved, err := g.resolveTestAST(bindingsNode.Children[i+1], refs, selfName, innerBound)
 									if err != nil {
 										return nil, err
 									}
@@ -918,7 +923,7 @@ func (g *Graph) resolveTestAST(node *Node, selfName string, boundNames map[strin
 						} else {
 							for i, pair := range bindingsNode.Children {
 								if pair.Kind == NodeList && len(pair.Children) == 2 {
-									resolved, err := g.resolveTestAST(pair.Children[1], selfName, innerBound)
+									resolved, err := g.resolveTestAST(pair.Children[1], refs, selfName, innerBound)
 									if err != nil {
 										return nil, err
 									}
@@ -943,7 +948,7 @@ func (g *Graph) resolveTestAST(node *Node, selfName string, boundNames map[strin
 					}
 				}
 				if len(node.Children) >= 3 {
-					resolved, err := g.resolveTestAST(node.Children[2], selfName, innerBound)
+					resolved, err := g.resolveTestAST(node.Children[2], refs, selfName, innerBound)
 					if err != nil {
 						return nil, err
 					}
@@ -966,7 +971,7 @@ func (g *Graph) resolveTestAST(node *Node, selfName string, boundNames map[strin
 						newBindings := make([]*Node, len(bindingsNode.Children))
 						for i, pair := range bindingsNode.Children {
 							if pair.Kind == NodeList && len(pair.Children) == 2 {
-								resolved, err := g.resolveTestAST(pair.Children[1], selfName, innerBound)
+								resolved, err := g.resolveTestAST(pair.Children[1], refs, selfName, innerBound)
 								if err != nil {
 									return nil, err
 								}
@@ -990,7 +995,7 @@ func (g *Graph) resolveTestAST(node *Node, selfName string, boundNames map[strin
 					}
 				}
 				if len(node.Children) >= 3 {
-					resolved, err := g.resolveTestAST(node.Children[2], selfName, innerBound)
+					resolved, err := g.resolveTestAST(node.Children[2], refs, selfName, innerBound)
 					if err != nil {
 						return nil, err
 					}
@@ -1005,7 +1010,7 @@ func (g *Graph) resolveTestAST(node *Node, selfName string, boundNames map[strin
 			if coreFormKeywords[head.Str] {
 				newChildren[0] = head
 				for i := 1; i < len(node.Children); i++ {
-					resolved, err := g.resolveTestAST(node.Children[i], selfName, boundNames)
+					resolved, err := g.resolveTestAST(node.Children[i], refs, selfName, boundNames)
 					if err != nil {
 						return nil, err
 					}
@@ -1018,7 +1023,7 @@ func (g *Graph) resolveTestAST(node *Node, selfName string, boundNames map[strin
 				if _, ok := g.eval.Builtins[head.Str]; ok {
 					newChildren[0] = &Node{Kind: NodeBuiltin, Str: head.Str}
 					for i := 1; i < len(node.Children); i++ {
-						resolved, err := g.resolveTestAST(node.Children[i], selfName, boundNames)
+						resolved, err := g.resolveTestAST(node.Children[i], refs, selfName, boundNames)
 						if err != nil {
 							return nil, err
 						}
@@ -1030,7 +1035,7 @@ func (g *Graph) resolveTestAST(node *Node, selfName string, boundNames map[strin
 		}
 
 		for i, child := range node.Children {
-			resolved, err := g.resolveTestAST(child, selfName, boundNames)
+			resolved, err := g.resolveTestAST(child, refs, selfName, boundNames)
 			if err != nil {
 				return nil, err
 			}
@@ -1306,7 +1311,7 @@ func (g *Graph) refreshAllLive(targetSymbols, targetNodeIDs map[string]bool) (*R
 				gateErr = fmt.Errorf("refresh-all: re-parse test %s/%s: %w", name, test.Name, parseErr)
 				break
 			}
-			resolvedTest, rErr := g.resolveTestAST(parsedTest, name, nil)
+			resolvedTest, rErr := g.resolveTestAST(parsedTest, &refs, name, nil)
 			if rErr != nil {
 				gateErr = fmt.Errorf("refresh-all: resolve test %s/%s: %w", name, test.Name, rErr)
 				break
@@ -1351,6 +1356,7 @@ func (g *Graph) refreshAllLive(targetSymbols, targetNodeIDs map[string]bool) (*R
 		}
 
 		// Tests passed → Green: commit new node.
+		newNode.Refs = refs // update after test resolution added test deps
 		newNode.Tests = newTests
 		g.symbolStatus[name] = StatusGreen
 		refreshed = append(refreshed, name)
@@ -1451,6 +1457,31 @@ func (g *Graph) loadLibraries() error {
 	if err != nil {
 		return err
 	}
+
+	// Auto-create shapes library if missing (migration path)
+	hasShapes := false
+	for _, n := range names {
+		if n == "shapes" {
+			hasShapes = true
+			break
+		}
+	}
+	if !hasShapes {
+		shapesPath := g.libraryPath("shapes")
+		if err := os.WriteFile(shapesPath, []byte{}, 0644); err != nil {
+			return fmt.Errorf("auto-create shapes: %w", err)
+		}
+		// Insert at position 1 (after base)
+		if len(names) > 0 {
+			names = append(names[:1], append([]string{"shapes"}, names[1:]...)...)
+		} else {
+			names = append(names, "shapes")
+		}
+		if err := writeManifest(g.manifestPath(), names); err != nil {
+			return fmt.Errorf("auto-create shapes: write manifest: %w", err)
+		}
+	}
+
 	g.libraries = names
 
 	for _, name := range names {
@@ -1570,23 +1601,25 @@ func (g *Graph) replayEntryForLib(entry, libName string) error {
 			return fmt.Errorf("parsing test expression: %w", parseErr)
 		}
 
-		// Resolve test with restricted scope (builtins + base + self)
-		resolvedTest, resolveErr := g.resolveTestAST(parsedTest, name, nil)
-		if resolveErr != nil {
-			return fmt.Errorf("test %s/%s: %w", name, label, resolveErr)
-		}
-
-		// Attach test to the current node for this symbol
+		// Resolve test with restricted scope (builtins + base + shapes + self)
 		nodeID, ok := g.symbols[name]
 		if !ok {
 			return fmt.Errorf("test: symbol %s not defined", name)
 		}
 		gn := g.nodes[nodeID]
+		var testRefs []Ref
+		resolvedTest, resolveErr := g.resolveTestAST(parsedTest, &testRefs, name, nil)
+		if resolveErr != nil {
+			return fmt.Errorf("test %s/%s: %w", name, label, resolveErr)
+		}
+
+		// Attach test and merge refs into the node
 		gn.Tests = append(gn.Tests, GraphNodeTest{
 			Name:   label,
 			Source: testSource,
 			Expr:   resolvedTest,
 		})
+		gn.Refs = append(gn.Refs, testRefs...)
 		g.symbolStatus[name] = StatusGreen
 		return nil
 
@@ -1622,6 +1655,10 @@ func (g *Graph) LibraryCreate(name string) error {
 }
 
 func (g *Graph) LibraryDelete(name string) error {
+	// Protect special libraries
+	if name == "base" || name == "shapes" {
+		return fmt.Errorf("library-delete: %q is a protected library and cannot be deleted", name)
+	}
 	// Check library exists
 	found := false
 	for _, lib := range g.libraries {
@@ -1871,7 +1908,7 @@ func (g *Graph) Promote(name, targetLib string) (*GraphNode, error) {
 				g.LibraryClose()
 				return nil, fmt.Errorf("promote: re-parse test %s/%s: %w", name, test.Name, parseErr)
 			}
-			resolvedTest, resolveErr := g.resolveTestAST(parsedTest, name, nil)
+			resolvedTest, resolveErr := g.resolveTestAST(parsedTest, &node.Refs, name, nil)
 			if resolveErr != nil {
 				g.LibraryClose()
 				return nil, fmt.Errorf("promote: resolve test %s/%s: %w", name, test.Name, resolveErr)
@@ -1975,6 +2012,28 @@ func (g *Graph) LibraryOrder() []string {
 }
 
 func (g *Graph) LibraryOrderSet(names []string) error {
+	// Enforce special library positions: if present, base must be first, shapes must be second
+	for i, name := range names {
+		if name == "base" && i != 0 {
+			return fmt.Errorf("library-order-set: \"base\" must be the first library")
+		}
+		if name == "shapes" {
+			expectedPos := 1
+			hasBase := false
+			for _, n := range names {
+				if n == "base" {
+					hasBase = true
+					break
+				}
+			}
+			if !hasBase {
+				expectedPos = 0
+			}
+			if i != expectedPos {
+				return fmt.Errorf("library-order-set: \"shapes\" must be the second library (after base)")
+			}
+		}
+	}
 	// Validate all names have corresponding files
 	for _, name := range names {
 		path := g.libraryPath(name)

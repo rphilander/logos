@@ -1,4 +1,5 @@
 base
+shapes
 debug
 web
 db

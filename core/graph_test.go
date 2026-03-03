@@ -673,19 +673,10 @@ func TestLibraryCreateAndList(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify it's in the order
+	// Verify it's in the order (shapes is auto-created)
 	order := g.LibraryOrder()
-	if len(order) != 1 || order[0] != "test-lib" {
-		t.Fatalf("expected [test-lib], got %v", order)
-	}
-
-	// Verify manifest file
-	data, err := os.ReadFile(filepath.Join(dir, "library-order.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.TrimSpace(string(data)) != "test-lib" {
-		t.Fatalf("expected manifest to contain 'test-lib', got %q", string(data))
+	if len(order) != 2 || order[0] != "shapes" || order[1] != "test-lib" {
+		t.Fatalf("expected [shapes test-lib], got %v", order)
 	}
 
 	// Verify library file exists
@@ -831,8 +822,9 @@ func TestLibraryDeleteEmptyOK(t *testing.T) {
 		t.Fatalf("expected no error deleting empty library, got %v", err)
 	}
 	order := g.LibraryOrder()
-	if len(order) != 0 {
-		t.Fatalf("expected empty order, got %v", order)
+	// shapes is auto-created and protected, so it remains
+	if len(order) != 1 || order[0] != "shapes" {
+		t.Fatalf("expected [shapes], got %v", order)
 	}
 }
 
@@ -968,13 +960,13 @@ func TestLibraryOrderSet(t *testing.T) {
 	g.LibraryCreate("alpha")
 	g.LibraryCreate("beta")
 
-	// Reverse order
-	if err := g.LibraryOrderSet([]string{"beta", "alpha"}); err != nil {
+	// Reorder: shapes must stay first (no base in test graph), then beta before alpha
+	if err := g.LibraryOrderSet([]string{"shapes", "beta", "alpha"}); err != nil {
 		t.Fatal(err)
 	}
 	order := g.LibraryOrder()
-	if len(order) != 2 || order[0] != "beta" || order[1] != "alpha" {
-		t.Fatalf("expected [beta, alpha], got %v", order)
+	if len(order) != 3 || order[0] != "shapes" || order[1] != "beta" || order[2] != "alpha" {
+		t.Fatalf("expected [shapes, beta, alpha], got %v", order)
 	}
 }
 
@@ -1736,21 +1728,24 @@ func TestResolveTestASTRestrictsScope(t *testing.T) {
 
 	// Test referencing builtins should work
 	parsed, _ := Parse("(eq 1 1)")
-	_, err := g.resolveTestAST(parsed, "my-fn", nil)
+	var refs []Ref
+	_, err := g.resolveTestAST(parsed, &refs, "my-fn", nil)
 	if err != nil {
 		t.Errorf("expected builtins to be allowed in test, got: %v", err)
 	}
 
 	// Test referencing base library should work
 	parsed, _ = Parse("(empty? (list))")
-	_, err = g.resolveTestAST(parsed, "my-fn", nil)
+	refs = nil
+	_, err = g.resolveTestAST(parsed, &refs, "my-fn", nil)
 	if err != nil {
 		t.Errorf("expected base library to be allowed in test, got: %v", err)
 	}
 
 	// Test referencing self should work
 	parsed, _ = Parse("(eq (my-fn 1) 2)")
-	_, err = g.resolveTestAST(parsed, "my-fn", nil)
+	refs = nil
+	_, err = g.resolveTestAST(parsed, &refs, "my-fn", nil)
 	if err != nil {
 		t.Errorf("expected self-reference to be allowed in test, got: %v", err)
 	}
@@ -1760,12 +1755,163 @@ func TestResolveTestASTRestrictsScope(t *testing.T) {
 
 	// Test referencing non-base, non-self should fail
 	parsed, _ = Parse("(eq (other-fn 1) 0)")
-	_, err = g.resolveTestAST(parsed, "my-fn", nil)
+	refs = nil
+	_, err = g.resolveTestAST(parsed, &refs, "my-fn", nil)
 	if err == nil {
 		t.Error("expected error referencing non-base symbol in test")
 	}
 	if err != nil && !strings.Contains(err.Error(), "test expressions can only reference") {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveTestASTTracksRefs(t *testing.T) {
+	dir := t.TempDir()
+	baseContent := `(define inc (fn (x) (add x 1)))
+`
+	os.WriteFile(filepath.Join(dir, "base.logos"), []byte(baseContent), 0644)
+	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\n"), 0644)
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	// Define with a test that references base symbol 'inc'
+	node, err := g.DefineWithTests("my-val", "42", []TestInput{
+		{Name: "uses-inc", Expr: "(eq (inc my-val) 43)"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Check that node.Refs includes 'inc' from the test
+	foundInc := false
+	for _, ref := range node.Refs {
+		if ref.Symbol == "inc" {
+			foundInc = true
+		}
+	}
+	if !foundInc {
+		t.Fatalf("expected Refs to include 'inc' from test, got: %v", node.Refs)
+	}
+}
+
+func TestShapesLibraryInTestScope(t *testing.T) {
+	dir := t.TempDir()
+	baseContent := `(define not (fn (x) (if x false true)))
+`
+	shapesContent := `(define my-shape? (fn (v) (not (eq v nil))))
+`
+	os.WriteFile(filepath.Join(dir, "base.logos"), []byte(baseContent), 0644)
+	os.WriteFile(filepath.Join(dir, "shapes.logos"), []byte(shapesContent), 0644)
+	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\nshapes\n"), 0644)
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	// Define with a test referencing shapes library symbol
+	_, err = g.DefineWithTests("my-val", "42", []TestInput{
+		{Name: "shape-check", Expr: "(my-shape? my-val)"},
+	})
+	if err != nil {
+		t.Fatalf("expected shapes symbol to be allowed in test, got: %v", err)
+	}
+}
+
+func TestRefreshAllCascadesThroughTestDeps(t *testing.T) {
+	dir := t.TempDir()
+	baseContent := `(define not (fn (x) (if x false true)))
+`
+	shapesContent := `(define always-true? (fn (v) true))
+`
+	os.WriteFile(filepath.Join(dir, "base.logos"), []byte(baseContent), 0644)
+	os.WriteFile(filepath.Join(dir, "shapes.logos"), []byte(shapesContent), 0644)
+	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\nshapes\n"), 0644)
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	// Define a symbol with a test that references the shapes predicate
+	_, err = g.DefineWithTests("my-val", "42", []TestInput{
+		{Name: "check", Expr: "(always-true? my-val)"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, _ := g.GetSymbolStatus("my-val")
+	if status != StatusGreen {
+		t.Fatal("expected my-val to be green")
+	}
+
+	// Change the shapes predicate to always fail
+	g.LibraryOpen("shapes")
+	_, err = g.DefineWithTests("always-true?", "(fn (v) false)", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.LibraryClose()
+
+	// Refresh-all should cascade to my-val and turn it Red
+	result, err := g.RefreshAll([]string{"always-true?"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Red) != 1 || result.Red[0] != "my-val" {
+		t.Fatalf("expected my-val to be red, got refreshed=%v red=%v stale=%v", result.Refreshed, result.Red, result.Stale)
+	}
+}
+
+func TestProtectedLibraryDelete(t *testing.T) {
+	dir := t.TempDir()
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	err = g.LibraryDelete("shapes")
+	if err == nil {
+		t.Fatal("expected error deleting protected library shapes")
+	}
+	if !strings.Contains(err.Error(), "protected") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestProtectedLibraryOrderSet(t *testing.T) {
+	dir := t.TempDir()
+	baseContent := ``
+	os.WriteFile(filepath.Join(dir, "base.logos"), []byte(baseContent), 0644)
+	os.WriteFile(filepath.Join(dir, "library-order.txt"), []byte("base\n"), 0644)
+	g, err := NewGraph(dir, DataBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	g.LibraryCreate("other")
+
+	// shapes not in first position should fail
+	err = g.LibraryOrderSet([]string{"base", "other", "shapes"})
+	if err == nil {
+		t.Fatal("expected error when shapes not second")
+	}
+
+	// base not first should fail
+	err = g.LibraryOrderSet([]string{"shapes", "base", "other"})
+	if err == nil {
+		t.Fatal("expected error when base not first")
+	}
+
+	// correct order should work
+	err = g.LibraryOrderSet([]string{"base", "shapes", "other"})
+	if err != nil {
+		t.Fatalf("expected success, got: %v", err)
 	}
 }
 
