@@ -385,6 +385,9 @@ func (c *Core) handleDefine(id string, msg map[string]any) map[string]any {
 		}
 	}
 
+	// Check if symbol already exists (redefine triggers cascade)
+	_, isRedefine := c.graph.symbols[name]
+
 	node, err := c.graph.DefineWithTests(name, expr, tests)
 	if err != nil {
 		return errorResponse(id, err.Error())
@@ -402,6 +405,17 @@ func (c *Core) handleDefine(id string, msg map[string]any) map[string]any {
 		resp["value"].(map[string]any)["tests"] = len(node.Tests)
 		resp["value"].(map[string]any)["status"] = "green"
 	}
+
+	// Auto-cascade on redefine
+	if isRedefine {
+		result, refreshErr := c.graph.RefreshAll([]string{name}, false)
+		if refreshErr == nil && result != nil {
+			resp["value"].(map[string]any)["refreshed"] = result.Refreshed
+			resp["value"].(map[string]any)["red"] = result.Red
+			resp["value"].(map[string]any)["stale"] = result.Stale
+		}
+	}
+
 	return resp
 }
 
@@ -445,6 +459,17 @@ func (c *Core) handleRefine(id string, msg map[string]any) map[string]any {
 		resp["value"].(map[string]any)["tests"] = len(node.Tests)
 		resp["value"].(map[string]any)["status"] = "green"
 	}
+
+	// Auto-cascade when propagation is indicated
+	if propagate {
+		result, refreshErr := c.graph.RefreshAll([]string{name}, false)
+		if refreshErr == nil && result != nil {
+			resp["value"].(map[string]any)["refreshed"] = result.Refreshed
+			resp["value"].(map[string]any)["red"] = result.Red
+			resp["value"].(map[string]any)["stale"] = result.Stale
+		}
+	}
+
 	return resp
 }
 
