@@ -375,6 +375,13 @@ func TestBuiltinSplitOnceEmptyNeedle(t *testing.T) {
 	testEvalError(t, `(split-once "abc" "")`)
 }
 
+func TestBuiltinLowerCase(t *testing.T) {
+	testEval(t, `(lower-case "Hello World")`, StringVal("hello world"))
+	testEval(t, `(lower-case "ABC")`, StringVal("abc"))
+	testEval(t, `(lower-case "already lower")`, StringVal("already lower"))
+	testEval(t, `(lower-case "")`, StringVal(""))
+}
+
 // --- Keywords ---
 
 func TestKeywordSelfEval(t *testing.T) {

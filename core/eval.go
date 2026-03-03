@@ -1259,6 +1259,7 @@ func DataBuiltins() map[string]Builtin {
 		"has?": builtinHas,
 		// String
 		"split-once": builtinSplitOnce,
+		"lower-case": builtinLowerCase,
 		// JSON
 		"to-json":   builtinToJSON,
 		"from-json": builtinFromJSON,
@@ -1813,6 +1814,16 @@ func builtinSplitOnce(args []Value) (Value, error) {
 	before := haystack[:idx]
 	after := haystack[idx+len(needle):]
 	return ListVal([]Value{StringVal(before), StringVal(after)}), nil
+}
+
+func builtinLowerCase(args []Value) (Value, error) {
+	if len(args) != 1 {
+		return Value{}, fmt.Errorf("lower-case: expected 1 arg, got %d", len(args))
+	}
+	if args[0].Kind != ValString {
+		return Value{}, fmt.Errorf("lower-case: expected String, got %s", args[0].KindName())
+	}
+	return StringVal(strings.ToLower(args[0].Str)), nil
 }
 
 func builtinToJSON(args []Value) (Value, error) {
