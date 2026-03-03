@@ -293,10 +293,12 @@ func handleResolveAnchor(req map[string]any) (any, string) {
 
 	m := result.(map[string]any)
 	currentHash, _ := m["body_hash"].(string)
+	line, _ := m["line"].(int)
+	endLine, _ := m["end_line"].(int)
 	if currentHash == expectedHash {
-		return map[string]any{"status": "valid"}, ""
+		return map[string]any{"status": "valid", "line": line, "end_line": endLine}, ""
 	}
-	return map[string]any{"status": "changed", "current_hash": currentHash}, ""
+	return map[string]any{"status": "changed", "current_hash": currentHash, "line": line, "end_line": endLine}, ""
 }
 
 func handleValidateAnchors(req map[string]any) (any, string) {
