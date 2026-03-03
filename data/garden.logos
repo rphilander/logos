@@ -188,3 +188,25 @@
 
 (test garden-survey "filters-by-status" (not (empty? (garden-survey :status :harvest))))
 
+(define garden-lang-contracts (dict :symbol "garden-lang-contracts" :name "Migrate lang to symbol contracts" :description "Lang nodes have internal test dicts (:tests, :examples) evaluated by lang-validate/lang-run-test, but these aren't runtime symbol contracts. Two angles: (1) shape predicates for the various lang node types (syntax, type, builtin, concept, example, test), (2) promote the internal test expressions to actual (test ...) entries so the runtime gates on them and cascade tracks them. The second is more interesting — it would make lang's 263 tests part of the contract system, so changing a builtin definition cascades through its lang documentation automatically." :status :seed :tags (list :libraries :core)))
+
+(test garden-lang-contracts "has-garden-item-shape" (garden-item-shape? garden-lang-contracts))
+
+(define garden (dict :symbol "garden" :name "Garden" :description "Project backlog as graph nodes. Items have lifecycle (seed, sprout, growing, harvest, compost), tags, and optional effort/dependencies/outcome. Query with garden-survey, garden-search, garden-inspect." :members (list garden-symbol-contracts garden-refine-op garden-toposort-compact garden-reified-shapes garden-refresh-blank-line-bug garden-stale-dependent-reporting garden-eval-builtin garden-atomic-multi-define garden-concurrency garden-lower-case-builtin garden-ast-patch-diff garden-per-module-callbacks garden-split-arg-order garden-http-client-module garden-scheduler-module garden-mcp-client-module garden-mcp-server-module garden-shared-docs-library garden-logos-level-guides garden-libs-library garden-nabu-rebuild garden-nisaba garden-garden garden-mcp-response-hooks garden-optimize-mcp-response garden-purpose-built-mcp-tools garden-batch-define-skill garden-library-migration-skill garden-validation-sweep-skill garden-subagent-leverage garden-generalize-describe garden-multi-session garden-search-index-module garden-sub-concept-layer garden-builtin-anchors garden-bespoke-chat-ui garden-virtual-members garden-library-namespaces garden-graph-macro-language garden-constrained-subagents garden-graph-branching garden-lang-contracts)))
+
+(test garden "has-root-shape" (root-shape? garden))
+
+(define garden-search (fn (query) (let (members (get garden :members) matched (filter (fn (item) (let (in-name (contains? (get item :name) query) in-desc (contains? (get item :description) query) in-tags (fold (fn (acc t) (or acc (contains? (to-string t) query))) false (get item :tags))) (or in-name (or in-desc in-tags)))) members)) (map (fn (item) (dict :name (get item :name) :symbol (get item :symbol) :status (get item :status))) matched))))
+
+(test garden-search "finds-by-name" (gt (len (garden-search "module")) 0))
+
+(test garden-search "returns-empty-for-no-match" (eq 0 (len (garden-search "zzzzzznothing"))))
+
+(define garden-survey (fn (& opts) (let (members (get garden :members) filter-type (if (empty? opts) nil (head opts)) filter-val (if (or (nil? filter-type) (empty? (rest opts))) nil (head (rest opts))) matches (if (nil? filter-type) members (filter (fn (item) (cond (eq filter-type :status) (eq (get item :status) filter-val) (eq filter-type :tag) (member? (get item :tags) filter-val) true true)) members))) (map (fn (item) (dict :name (get item :name) :symbol (get item :symbol) :status (get item :status) :tags (get item :tags))) matches))))
+
+(test garden-survey "filters-by-tag" (gt (len (garden-survey :tag :core)) 0))
+
+(test garden-survey "returns-all" (not (empty? (garden-survey))))
+
+(test garden-survey "filters-by-status" (not (empty? (garden-survey :status :harvest))))
+
