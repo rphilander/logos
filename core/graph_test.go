@@ -2283,7 +2283,7 @@ func TestRefineExprCarriesForwardTests(t *testing.T) {
 	}
 }
 
-func TestRefineExprAndTestNoPropagation(t *testing.T) {
+func TestRefineExprAndTestPropagates(t *testing.T) {
 	g := testGraphWithBase(t)
 
 	// Define a symbol
@@ -2302,9 +2302,9 @@ func TestRefineExprAndTestNoPropagation(t *testing.T) {
 	if len(newNode.Tests) != 1 {
 		t.Fatalf("expected 1 test, got %d", len(newNode.Tests))
 	}
-	// Both expr and tests changed → propagate = false
-	if propagate {
-		t.Error("expected propagate = false when both expr and tests changed")
+	// Refine always propagates when successful
+	if !propagate {
+		t.Error("expected propagate = true after successful refine")
 	}
 }
 

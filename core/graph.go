@@ -491,10 +491,7 @@ func (g *Graph) Refine(name, newExpr string, addTests []TestInput, removeTests [
 		}
 	}
 
-	// Propagation: suppressed when both expr and tests change simultaneously
-	propagate := !(exprChanged && testsChanged)
-
-	return newNode, propagate, nil
+	return newNode, true, nil
 }
 
 func (g *Graph) Delete(name string) error {
