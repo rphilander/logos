@@ -72,15 +72,15 @@
 
 (define merge (fn (m1 m2) (fold (fn (acc k) (put acc k (get m2 k))) m1 (keys m2))))
 
-(define contains? (fn (s sub) (not (nil? (split-once sub s)))))
+(define contains? (fn (s sub) (not (nil? (split-once s sub)))))
 
-(define starts-with? (fn (s prefix) (let (r (split-once prefix s)) (if (nil? r) false (eq (head r) "")))))
+(define starts-with? (fn (s prefix) (let (r (split-once s prefix)) (if (nil? r) false (eq (head r) "")))))
 
-(define ends-with? (fn (s suffix) (loop ((s s)) (let (r (split-once suffix s)) (if (nil? r) false (if (eq (nth r 1) "") true (recur (nth r 1))))))))
+(define ends-with? (fn (s suffix) (loop ((s s)) (let (r (split-once s suffix)) (if (nil? r) false (if (eq (nth r 1) "") true (recur (nth r 1))))))))
 
-(define replace (fn (s old new) (loop ((acc "") (s s)) (let (r (split-once old s)) (if (nil? r) (concat acc s) (recur (concat acc (head r) new) (nth r 1)))))))
+(define replace (fn (s old new) (loop ((acc "") (s s)) (let (r (split-once s old)) (if (nil? r) (concat acc s) (recur (concat acc (head r) new) (nth r 1)))))))
 
-(define split (fn (s sep) (loop ((acc (list)) (s s)) (let (r (split-once sep s)) (if (nil? r) (reverse (cons s acc)) (recur (cons (head r) acc) (nth r 1)))))))
+(define split (fn (s sep) (loop ((acc (list)) (s s)) (let (r (split-once s sep)) (if (nil? r) (reverse (cons s acc)) (recur (cons (head r) acc) (nth r 1)))))))
 
 (define join (fn (sep xs) (if (empty? xs) "" (fold (fn (acc x) (concat acc sep x)) (head xs) (rest xs)))))
 

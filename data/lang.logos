@@ -54,7 +54,7 @@
 
 (define lang-test-string-to-string (dict "name" "to-string on int" "expr" "(eq (to-string 42) \"42\")"))
 
-(define lang-test-string-split-once (dict "name" "split-once is the string primitive" "expr" "(eq (split-once \",\" \"a,b,c\") (list \"a\" \"b,c\"))"))
+(define lang-test-string-split-once (dict "name" "split-once is the string primitive" "expr" "(eq (split-once \"a,b,c\" \",\") (list \"a\" \"b,c\"))"))
 
 (define lang-type-string (dict "symbol" "lang-type-string" "name" "String" "description" "Text values in double quotes. The core provides concat for building strings and split-once as the sole decomposition primitive. No positional indexing, no len on strings — this is by design (encoding-agnostic). Higher-level string operations (split, join, replace, contains?, starts-with?, ends-with?) are built in the base library from split-once and concat." "keywords" (list "text" "characters" "concatenation" "split" "encoding" "double quotes") "examples" (list lang-ex-string-literal lang-ex-string-concat) "tests" (list lang-test-string-empty lang-test-string-to-string lang-test-string-split-once)))
 
@@ -502,15 +502,15 @@
 
 (define lang-builtins-map (dict :symbol "lang-builtins-map" :name "Map" :description "Builtins for updating and querying maps. put adds or updates keys (returning a new map), has? tests key existence. See also dict, get, keys, and len in the Data category. The base library adds dissoc and merge." :keywords (list "map operations" "update" "key existence" "associative" "immutable update") :members (list lang-builtin-put lang-builtin-has)))
 
-(define lang-ex-split-once-basic (dict :name "split string at first delimiter" :expr "(eq (split-once \",\" \"a,b,c\") (list \"a\" \"b,c\"))"))
+(define lang-ex-split-once-basic (dict :name "split string at first delimiter" :expr "(eq (split-once \"a,b,c\" \",\") (list \"a\" \"b,c\"))"))
 
-(define lang-ex-split-once-no-match (dict :name "no delimiter found returns nil" :expr "(eq (split-once \",\" \"hello\") nil)"))
+(define lang-ex-split-once-no-match (dict :name "no delimiter found returns nil" :expr "(eq (split-once \"hello\" \",\") nil)"))
 
-(define lang-test-split-once-multi-char (dict :name "multi-character delimiter" :expr "(eq (split-once \"::\" \"a::b::c\") (list \"a\" \"b::c\"))"))
+(define lang-test-split-once-multi-char (dict :name "multi-character delimiter" :expr "(eq (split-once \"a::b::c\" \"::\") (list \"a\" \"b::c\"))"))
 
-(define lang-test-split-once-arg-order (dict :name "first arg is delimiter, second is string" :expr "(eq (head (split-once \"/\" \"path/to/file\")) \"path\")"))
+(define lang-test-split-once-arg-order (dict :name "first arg is string, second is delimiter" :expr "(eq (head (split-once \"path/to/file\" \"/\")) \"path\")"))
 
-(define lang-builtin-split-once (dict :symbol "lang-builtin-split-once" :name "split-once" :description "Splits a string at the first occurrence of a delimiter. (split-once delimiter string). Returns a two-element list: the part before and the part after the delimiter. If the delimiter is not found, returns (list original-string \"\"). This is the sole string decomposition primitive in core — all higher-level string operations (split, contains?, replace, etc.) are built from split-once and concat in the base library. Note: argument order is (delimiter, string), not (string, delimiter)." :keywords (list "split" "string decompose" "tokenize" "parse" "delimiter" "substring" "primitive") :examples (list lang-ex-split-once-basic lang-ex-split-once-no-match) :tests (list lang-test-split-once-multi-char lang-test-split-once-arg-order) :see-also (list (link 'lang-builtin-concat) (link 'lang-type-string))))
+(define lang-builtin-split-once (dict :symbol "lang-builtin-split-once" :name "split-once" :description "Splits a string at the first occurrence of a delimiter. (split-once string delimiter). Returns a two-element list: the part before and the part after the delimiter. If the delimiter is not found, returns nil. This is the sole string decomposition primitive in core — all higher-level string operations (split, contains?, replace, etc.) are built from split-once and concat in the base library. Argument order matches split and other string ops: string first, delimiter second." :keywords (list "split" "string decompose" "tokenize" "parse" "delimiter" "substring" "primitive") :examples (list lang-ex-split-once-basic lang-ex-split-once-no-match) :tests (list lang-test-split-once-multi-char lang-test-split-once-arg-order) :see-also (list (link 'lang-builtin-concat) (link 'lang-type-string))))
 
 (define lang-builtins-string (dict :symbol "lang-builtins-string" :name "String" :description "The sole string decomposition builtin. Logos strings are encoding-agnostic — no positional indexing, no len on strings. split-once is the primitive; higher-level operations (split, join, replace, contains?, starts-with?, ends-with?) are built from it in the base library." :keywords (list "string" "text" "parse" "tokenize" "decompose" "encoding-agnostic") :members (list lang-builtin-split-once)))
 
