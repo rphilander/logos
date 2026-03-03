@@ -1,0 +1,162 @@
+(define garden-ast-patch-diff (dict :symbol "garden-ast-patch-diff" :name "AST-level patch/diff" :description "Programmatic structural transformations instead of full redefinitions. node-expr returns the AST; a define-from-ast or patch op would close the loop. Natural extension of refine." :status :seed :tags (list :core)))
+
+(test garden-ast-patch-diff "has-garden-item-shape" (garden-item-shape? garden-ast-patch-diff))
+
+(define garden-atomic-multi-define (dict :symbol "garden-atomic-multi-define" :name "Atomic multi-symbol updates" :description "Extend refresh-all to accept multiple defines as an atomic unit. All succeed or none take effect. Immutable nodes make rollback trivial." :status :seed :tags (list :core)))
+
+(test garden-atomic-multi-define "has-garden-item-shape" (garden-item-shape? garden-atomic-multi-define))
+
+(define garden-batch-define-skill (dict :symbol "garden-batch-define-skill" :name "Batch define skill" :description "Define multiple symbols from a specification in one operation." :status :seed :tags (list :dx)))
+
+(test garden-batch-define-skill "has-garden-item-shape" (garden-item-shape? garden-batch-define-skill))
+
+(define garden-concurrency (dict :symbol "garden-concurrency" :name "Concurrency" :description "Make the graph safe for concurrent access. Go goroutines/channels as substrate. Required for agents, schedulers, concurrent HTTP handlers. Immutable node design helps." :status :seed :tags (list :core)))
+
+(test garden-concurrency "has-garden-item-shape" (garden-item-shape? garden-concurrency))
+
+(define garden-eval-builtin (dict :symbol "garden-eval-builtin" :name "eval builtin" :description "Evaluate an arbitrary expression string from within logos. link/follow covers named symbols but not general expressions." :status :seed :tags (list :core)))
+
+(test garden-eval-builtin "has-garden-item-shape" (garden-item-shape? garden-eval-builtin))
+
+(define garden-garden (dict :symbol "garden-garden" :name "Garden (backlog tracker)" :description "Graph-native backlog/idea tracker. Items as nodes with lifecycle, effort, tags. Functions for querying and filtering." :status :harvest :tags (list :apps) :outcome "Implemented as the garden library itself. Items are graph nodes with garden-item-shape? contract."))
+
+(test garden-garden "has-garden-item-shape" (garden-item-shape? garden-garden))
+
+(define garden-generalize-describe (dict :symbol "garden-generalize-describe" :name "Generalize lang-describe" :description "Any node following the name/description/examples/tests/members convention could use it. Not specific to lang nodes." :status :seed :tags (list :dx :libraries)))
+
+(test garden-generalize-describe "has-garden-item-shape" (garden-item-shape? garden-generalize-describe))
+
+(define garden-http-client-module (dict :symbol "garden-http-client-module" :name "HTTP client module" :description "Call external APIs, webhooks, Anthropic API. Key enabler for agents-as-primitives." :status :sprout :tags (list :modules)))
+
+(test garden-http-client-module "has-garden-item-shape" (garden-item-shape? garden-http-client-module))
+
+(define garden-inspect (fn (item) (let (name (get item :name) status (to-string (get item :status)) tags (join ", " (map to-string (get item :tags))) desc (get item :description) effort (get item :effort) blocked-by (get item :blocked-by) outcome (get item :outcome) see-also (get item :see-also) header (concat "### " name "\n**Status**: " status " | **Tags**: " tags "\n") effort-line (if (nil? effort) "" (concat "**Effort**: " (to-string effort) "\n")) desc-line (concat "\n" desc "\n") blocked-sec (if (or (nil? blocked-by) (empty? blocked-by)) "" (concat "\n**Blocked by**:\n" (join "\n" (map (fn (dep) (concat "- " (to-string (get dep :item)) ": " (get dep :reason))) blocked-by)) "\n")) outcome-sec (if (nil? outcome) "" (concat "\n**Outcome**: " outcome "\n")) sa-sec (if (or (nil? see-also) (empty? see-also)) "" (concat "\n**See also**: " (join ", " (map to-string see-also)) "\n"))) (concat header effort-line desc-line blocked-sec outcome-sec sa-sec))))
+
+(test garden-inspect "is-fn" (fn? garden-inspect))
+
+(test garden-inspect "produces-string" (string? (garden-inspect (dict :symbol "x" :name "Test" :description "A test item." :status :seed :tags (list :core)))))
+
+(define garden-library-migration-skill (dict :symbol "garden-library-migration-skill" :name "Library migration skill" :description "Move symbols from session to library via subagent." :status :seed :tags (list :dx)))
+
+(test garden-library-migration-skill "has-garden-item-shape" (garden-item-shape? garden-library-migration-skill))
+
+(define garden-libs-library (dict :symbol "garden-libs-library" :name "Libs library" :description "Document what's in base, debug, web, db libraries as graph nodes." :status :seed :tags (list :libraries)))
+
+(test garden-libs-library "has-garden-item-shape" (garden-item-shape? garden-libs-library))
+
+(define garden-logos-level-guides (dict :symbol "garden-logos-level-guides" :name "Logos-level guides" :description "How-to guides for adding a base library function, adding a lang node, adding an arch concept, creating a library. Different from current guides (which are Go-level)." :status :sprout :tags (list :libraries)))
+
+(test garden-logos-level-guides "has-garden-item-shape" (garden-item-shape? garden-logos-level-guides))
+
+(define garden-lower-case-builtin (dict :symbol "garden-lower-case-builtin" :name "lower-case string builtin" :description "Enables case-insensitive search in lang-search and elsewhere." :status :seed :tags (list :core) :effort :small))
+
+(test garden-lower-case-builtin "has-garden-item-shape" (garden-item-shape? garden-lower-case-builtin))
+
+(define garden-mcp-client-module (dict :symbol "garden-mcp-client-module" :name "MCP client module" :description "Call tools on external MCP servers from within logos." :status :seed :tags (list :modules :mcp)))
+
+(test garden-mcp-client-module "has-garden-item-shape" (garden-item-shape? garden-mcp-client-module))
+
+(define garden-mcp-response-hooks (dict :symbol "garden-mcp-response-hooks" :name "MCP response hooks for context injection" :description "Open a library, get its docs. Hit an error, get relevant arch context. Close a library, trigger smoke test. Makes the MCP layer context-aware." :status :sprout :tags (list :mcp)))
+
+(test garden-mcp-response-hooks "has-garden-item-shape" (garden-item-shape? garden-mcp-response-hooks))
+
+(define garden-mcp-server-module (dict :symbol "garden-mcp-server-module" :name "MCP server module" :description "Expose graph tools to other MCP clients (other LLMs, other systems)." :status :seed :tags (list :modules :mcp)))
+
+(test garden-mcp-server-module "has-garden-item-shape" (garden-item-shape? garden-mcp-server-module))
+
+(define garden-multi-session (dict :symbol "garden-multi-session" :name "Multi-session/project switching" :description "Separate graph contexts for different work streams." :status :seed :tags (list :infra)))
+
+(test garden-multi-session "has-garden-item-shape" (garden-item-shape? garden-multi-session))
+
+(define garden-nabu-rebuild (dict :symbol "garden-nabu-rebuild" :name "Nabu rebuild (Phase 4)" :description "LLM-driven data visualization system, rebuilt on logos v3." :status :sprout :tags (list :apps)))
+
+(test garden-nabu-rebuild "has-garden-item-shape" (garden-item-shape? garden-nabu-rebuild))
+
+(define garden-nisaba (dict :symbol "garden-nisaba" :name "Nisaba (roadmap app)" :description "Roadmap management app. Has db library and schema. Superseded by garden library for backlog tracking." :status :compost :tags (list :apps)))
+
+(test garden-nisaba "has-garden-item-shape" (garden-item-shape? garden-nisaba))
+
+(define garden-optimize-mcp-response (dict :symbol "garden-optimize-mcp-response" :name "Optimize MCP response format" :description "Define could return just {ok, node_id} instead of echoing everything. Reduces context window consumption." :status :seed :tags (list :mcp)))
+
+(test garden-optimize-mcp-response "has-garden-item-shape" (garden-item-shape? garden-optimize-mcp-response))
+
+(define garden-per-module-callbacks (dict :symbol "garden-per-module-callbacks" :name "Per-module callback routing" :description "Register handlers per module instead of a single global on-request." :status :seed :tags (list :core :modules)))
+
+(test garden-per-module-callbacks "has-garden-item-shape" (garden-item-shape? garden-per-module-callbacks))
+
+(define garden-purpose-built-mcp-tools (dict :symbol "garden-purpose-built-mcp-tools" :name "Purpose-built MCP tools" :description "last-trace, trace-for-symbol, diagnostic snapshot, node inspection. Targeted tools that reduce eval round-trips." :status :seed :tags (list :mcp)))
+
+(test garden-purpose-built-mcp-tools "has-garden-item-shape" (garden-item-shape? garden-purpose-built-mcp-tools))
+
+(define garden-refine-op (dict :symbol "garden-refine-op" :name "Refine operation" :description "Create a new node from an existing one by specifying deltas (change expr, add/remove test). Immutable data structure update semantics." :status :harvest :tags (list :core) :outcome "Part of phase 3.0. Refine carries forward unchanged fields, runs test gate, always cascades on success."))
+
+(test garden-refine-op "has-garden-item-shape" (garden-item-shape? garden-refine-op))
+
+(define garden-refresh-blank-line-bug (dict :symbol "garden-refresh-blank-line-bug" :name "Refresh-all blank-line separator bug" :description "appendLogToOwner can write consecutive entries without the blank line the replay parser expects. Causes unexpected input after expression on restart." :status :sprout :tags (list :core)))
+
+(test garden-refresh-blank-line-bug "has-garden-item-shape" (garden-item-shape? garden-refresh-blank-line-bug))
+
+(define garden-reified-shapes (dict :symbol "garden-reified-shapes" :name "Reified node shapes" :description "Define shape as a first-class concept: predicates that validate expected keys of a dict. Anchors, concepts, interactions, lang nodes all follow conventions; shapes make those conventions explicit, testable, and reusable." :status :harvest :tags (list :core :arch) :outcome "Phase 3.2. 5 shape predicates in shapes library (anchor, concept, interaction, root, guide). 44 arch inline tests migrated to predicate calls."))
+
+(test garden-reified-shapes "has-garden-item-shape" (garden-item-shape? garden-reified-shapes))
+
+(define garden-roadmap (dict :symbol "garden-roadmap" :name "Current Roadmap" :goal "Solidify the development infrastructure — contracts, shapes, architecture docs, backlog tracking — before building the next application layer." :items (list (link 'garden-sub-concept-layer) (link 'garden-refresh-blank-line-bug) (link 'garden-split-arg-order) (link 'garden-logos-level-guides))))
+
+(define garden-scheduler-module (dict :symbol "garden-scheduler-module" :name "Scheduler module" :description "Cron-like triggers, delayed execution." :status :seed :tags (list :modules)))
+
+(test garden-scheduler-module "has-garden-item-shape" (garden-item-shape? garden-scheduler-module))
+
+(define garden-search-index-module (dict :symbol "garden-search-index-module" :name "Search index module" :description "Indexed full-text search across the graph." :status :seed :tags (list :infra :modules)))
+
+(test garden-search-index-module "has-garden-item-shape" (garden-item-shape? garden-search-index-module))
+
+(define garden-shared-docs-library (dict :symbol "garden-shared-docs-library" :name "Shared docs library" :description "Extract common tree-walking, validation, description patterns from lang/arch into shared framework. Deferred pending more usage experience." :status :seed :tags (list :libraries)))
+
+(test garden-shared-docs-library "has-garden-item-shape" (garden-item-shape? garden-shared-docs-library))
+
+(define garden-split-arg-order (dict :symbol "garden-split-arg-order" :name "split/split-once arg order inconsistency" :description "One is (delimiter, string), the other (string, delimiter). Should be consistent." :status :sprout :tags (list :core) :effort :small))
+
+(test garden-split-arg-order "has-garden-item-shape" (garden-item-shape? garden-split-arg-order))
+
+(define garden-stale-dependent-reporting (dict :symbol "garden-stale-dependent-reporting" :name "Stale dependent reporting on define" :description "Include ref-by results for the superseded node in the define response. Cheap to compute, turns a hidden footgun into an explicit prompt." :status :seed :tags (list :core)))
+
+(test garden-stale-dependent-reporting "has-garden-item-shape" (garden-item-shape? garden-stale-dependent-reporting))
+
+(define garden-sub-concept-layer (dict :symbol "garden-sub-concept-layer" :name "Sub-concept layer" :description "Add middle-layer concepts to arch: symbol table, GraphNode fields, log serialization, response format, graph-eval bridge, symbol ownership, eval entry points. Closes the gap between high-level narrative and implementation detail." :status :sprout :tags (list :arch) :see-also (list (link 'arch-graph))))
+
+(test garden-sub-concept-layer "has-garden-item-shape" (garden-item-shape? garden-sub-concept-layer))
+
+(define garden-subagent-leverage (dict :symbol "garden-subagent-leverage" :name "Subagent leverage" :description "Use subagents for mechanical batch ops, migrations, documentation authoring. Better docs enable better agents (virtuous cycle)." :status :seed :tags (list :dx)))
+
+(test garden-subagent-leverage "has-garden-item-shape" (garden-item-shape? garden-subagent-leverage))
+
+(define garden-symbol-contracts (dict :symbol "garden-symbol-contracts" :name "Symbol contracts" :description "Nodes gain a tests field. Tests gate node creation. Auto-refresh cascade with red/green status and circuit breaker." :status :harvest :tags (list :core) :outcome "Phase 3.0. GraphNode gains Tests field, test gate in Define/Refine, restricted resolveTestAST, symbol status, RefreshAll cascade with circuit breaker."))
+
+(test garden-symbol-contracts "has-garden-item-shape" (garden-item-shape? garden-symbol-contracts))
+
+(define garden-toposort-compact (dict :symbol "garden-toposort-compact" :name "Toposort in compact" :description "compactLibrary writes definitions in arbitrary order (Go map iteration), causing startup failures when symbols depend on each other. Fix: topological sort using node Refs." :status :harvest :tags (list :core) :outcome "Phase 3.1. LibraryCompact now uses topological sort."))
+
+(test garden-toposort-compact "has-garden-item-shape" (garden-item-shape? garden-toposort-compact))
+
+(define garden-validation-sweep-skill (dict :symbol "garden-validation-sweep-skill" :name "Validation sweep skill" :description "Subagent runs tests on all sections, reports failures." :status :seed :tags (list :dx)))
+
+(test garden-validation-sweep-skill "has-garden-item-shape" (garden-item-shape? garden-validation-sweep-skill))
+
+(define garden (dict :symbol "garden" :name "Garden" :description "Project backlog as graph nodes. Items have lifecycle (seed, sprout, growing, harvest, compost), tags, and optional effort/dependencies/outcome. Query with garden-survey, garden-search, garden-inspect." :members (list garden-symbol-contracts garden-refine-op garden-toposort-compact garden-reified-shapes garden-refresh-blank-line-bug garden-stale-dependent-reporting garden-eval-builtin garden-atomic-multi-define garden-concurrency garden-lower-case-builtin garden-ast-patch-diff garden-per-module-callbacks garden-split-arg-order garden-http-client-module garden-scheduler-module garden-mcp-client-module garden-mcp-server-module garden-shared-docs-library garden-logos-level-guides garden-libs-library garden-nabu-rebuild garden-nisaba garden-garden garden-mcp-response-hooks garden-optimize-mcp-response garden-purpose-built-mcp-tools garden-batch-define-skill garden-library-migration-skill garden-validation-sweep-skill garden-subagent-leverage garden-generalize-describe garden-multi-session garden-search-index-module garden-sub-concept-layer)))
+
+(test garden "has-root-shape" (root-shape? garden))
+
+(define garden-search (fn (query) (let (members (get garden :members) matched (filter (fn (item) (let (in-name (contains? (get item :name) query) in-desc (contains? (get item :description) query) in-tags (fold (fn (acc t) (or acc (contains? (to-string t) query))) false (get item :tags))) (or in-name (or in-desc in-tags)))) members)) (map (fn (item) (dict :name (get item :name) :symbol (get item :symbol) :status (get item :status))) matched))))
+
+(test garden-search "finds-by-name" (gt (len (garden-search "module")) 0))
+
+(test garden-search "returns-empty-for-no-match" (eq 0 (len (garden-search "zzzzzznothing"))))
+
+(define garden-survey (fn (& opts) (let (members (get garden :members) filter-type (if (empty? opts) nil (head opts)) filter-val (if (or (nil? filter-type) (empty? (rest opts))) nil (head (rest opts))) matches (if (nil? filter-type) members (filter (fn (item) (cond (eq filter-type :status) (eq (get item :status) filter-val) (eq filter-type :tag) (member? (get item :tags) filter-val) true true)) members))) (map (fn (item) (dict :name (get item :name) :symbol (get item :symbol) :status (get item :status) :tags (get item :tags))) matches))))
+
+(test garden-survey "returns-all" (eq 34 (len (garden-survey))))
+
+(test garden-survey "filters-by-status" (eq 5 (len (garden-survey :status :harvest))))
+
+(test garden-survey "filters-by-tag" (gt (len (garden-survey :tag :core)) 0))
+

@@ -14,6 +14,14 @@
 
 (test concept-shape? "rejects-non-map" (not (concept-shape? "hello")))
 
+(define garden-item-shape? (fn (v) (and (map? v) (has? v :symbol) (has? v :name) (has? v :description) (has? v :status) (has? v :tags))))
+
+(test garden-item-shape? "accepts-valid" (garden-item-shape? (dict :symbol "x" :name "n" :description "d" :status :seed :tags (list :core))))
+
+(test garden-item-shape? "rejects-missing-status" (not (garden-item-shape? (dict :symbol "x" :name "n" :description "d" :tags (list)))))
+
+(test garden-item-shape? "rejects-non-map" (not (garden-item-shape? 42)))
+
 (define guide-shape? (fn (v) (and (map? v) (has? v :symbol) (has? v :name) (has? v :description) (has? v :keywords) (has? v :steps) (has? v :see-also))))
 
 (test guide-shape? "accepts-valid" (guide-shape? (dict :symbol "x" :name "n" :description "d" :keywords (list) :steps (list) :see-also (list))))
